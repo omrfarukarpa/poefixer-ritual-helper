@@ -15,8 +15,16 @@ inline bool IsHiddenItem(const RitualItem& it) {
     return it.name == "Hidden Item";
 }
 
+inline bool EqualsCI(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (LowerAscii(a[i]) != LowerAscii(b[i])) return false;
+    return true;
+}
+
 inline std::vector<RitualItem> MatchDeferItems(
-    const RitualWindow& win, const std::vector<std::string>& rules,
+    const RitualWindow& win, const std::vector<std::string>& selectedItems,
+    const std::vector<std::string>& rules,
     const std::unordered_map<std::string, double>& priceExalted, int minValueEx) {
     std::vector<RitualItem> out;
     for (const auto& it : win.items) {
@@ -27,9 +35,13 @@ inline std::vector<RitualItem> MatchDeferItems(
         if (pIt != priceExalted.end()) value = pIt->second;
 
         bool matched = false;
-        for (const auto& r : rules) {
-            if (r.empty()) continue;
-            if (ContainsCI(it.name, r.c_str())) { matched = true; break; }
+        for (const auto& s : selectedItems)
+            if (EqualsCI(it.name, s)) { matched = true; break; }
+        if (!matched) {
+            for (const auto& r : rules) {
+                if (r.empty()) continue;
+                if (ContainsCI(it.name, r.c_str())) { matched = true; break; }
+            }
         }
         if (!matched && minValueEx > 0 && value >= static_cast<double>(minValueEx))
             matched = true;

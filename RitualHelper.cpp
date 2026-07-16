@@ -10,6 +10,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -22,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "0.3.0";
+inline constexpr const char* kRitualHelperVersion    = "0.3.1";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -189,40 +190,8 @@ public:
                          RitualHelperConfig::kScanIntervalMinMs,
                          RitualHelperConfig::kScanIntervalMaxMs);
 
-        ImGui::SeparatorText("Defer rules");
-        ImGui::Checkbox("Dry run (no clicks, just show what would be deferred)",
-                        &m_settings.dryRun);
-        if (m_settings.dryRun) {
-            ImGui::TextDisabled("Safe mode: the DEFER button only highlights + logs.");
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(230, 190, 90, 255));
-            ImGui::TextWrapped("Live mode: the DEFER button sends real clicks (enters "
-                               "defer mode, clicks matched items, applies).");
-            ImGui::PopStyleColor();
-        }
-
-        ImGui::TextDisabled("An item is deferred when its name contains any rule text:");
-        int removeAt = -1;
-        for (int i = 0; i < static_cast<int>(m_settings.deferRules.size()); ++i) {
-            ImGui::PushID(i);
-            if (ImGui::SmallButton("X")) removeAt = i;
-            ImGui::SameLine();
-            ImGui::TextUnformatted(m_settings.deferRules[i].c_str());
-            ImGui::PopID();
-        }
-        if (removeAt >= 0)
-            m_settings.deferRules.erase(m_settings.deferRules.begin() + removeAt);
-
-        ImGui::SetNextItemWidth(240.f);
-        const bool entered = ImGui::InputText("##newrule", m_ruleBuf, sizeof(m_ruleBuf),
-                                              ImGuiInputTextFlags_EnterReturnsTrue);
-        ImGui::SameLine();
-        if ((ImGui::Button("Add rule") || entered) && m_ruleBuf[0] != '\0') {
-            m_settings.deferRules.push_back(m_ruleBuf);
-            m_ruleBuf[0] = '\0';
-        }
-        if (m_settings.deferRules.empty())
-            ImGui::TextDisabled("No rules yet. Example: add 'omen' or 'Deathrattle'.");
+        DrawItemPicker();
+        DrawNameRules();
 
         ImGui::SeparatorText("Value defer (poe2scout)");
         ImGui::TextWrapped("Also defer any revealed item whose live poe2scout price "
@@ -252,34 +221,119 @@ public:
         if (ImGui::Button(m_fetching ? "Refreshing..." : "Refresh prices") && !m_fetching)
             StartFetch();
 
-        ImGui::SeparatorText("Status");
-        if (m_window) {
-            ImGui::Text("Window: '%s' (id=%d, %dx%d), items=%zu",
-                        m_window->name.c_str(), m_window->inventoryId,
-                        m_window->totalBoxesX, m_window->totalBoxesY,
-                        m_window->items.size());
-        } else {
-            ImGui::TextDisabled("No ritual window detected (open the Favours window).");
-        }
-        ImGui::Text("Ritual-keyword UI elements: %zu", m_uiHits.size());
-        int shown = 0;
-        for (const auto& e : m_uiHits) {
-            if (shown++ >= 10) { ImGui::TextDisabled("..."); break; }
-            ImGui::TextDisabled("  id='%s' text='%s'", e.stringId.c_str(), e.text.c_str());
-        }
-
         ImGui::SeparatorText("Debug");
         ImGui::Checkbox("Debug mode", &m_settings.debugMode);
         if (m_settings.debugMode) {
-            ImGui::TextWrapped(
-                "With the Favours window open, click the button: it writes "
-                "debug/ritual-dump.txt with every on-screen inventory (names prove "
-                "how the host exposes the ritual window) and every ritual-keyword "
-                "UI element (how to find the defer/reroll buttons).");
+            ImGui::Checkbox("Dry run (no clicks, just show what would be deferred)",
+                            &m_settings.dryRun);
+
+            if (m_window) {
+                ImGui::Text("Window: '%s' (id=%d, %dx%d), items=%zu",
+                            m_window->name.c_str(), m_window->inventoryId,
+                            m_window->totalBoxesX, m_window->totalBoxesY,
+                            m_window->items.size());
+            } else {
+                ImGui::TextDisabled("No ritual window detected (open the Favours window).");
+            }
+            ImGui::Text("Ritual-keyword UI elements: %zu", m_uiHits.size());
+            int shown = 0;
+            for (const auto& e : m_uiHits) {
+                if (shown++ >= 10) { ImGui::TextDisabled("..."); break; }
+                ImGui::TextDisabled("  id='%s' text='%s'", e.stringId.c_str(), e.text.c_str());
+            }
+
             if (ImGui::Button("Write ritual dump")) WriteDump();
             if (!m_lastDumpPath.empty())
                 ImGui::TextDisabled("Last dump: %s", m_lastDumpPath.c_str());
         }
+    }
+
+    void DrawItemPicker() {
+        std::lock_guard<std::mutex> lk(m_fetchMutex);
+
+        char header[96];
+        std::snprintf(header, sizeof(header), "Defer items (%zu selected)###defer_items",
+                      m_settings.selectedItems.size());
+        ImGui::SeparatorText(header);
+
+        if (m_prices.categories.empty()) {
+            ImGui::TextDisabled("Item list loads from poe2scout - %s", m_fetchStatus.c_str());
+            return;
+        }
+
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%s", m_itemSearch.c_str());
+        ImGui::SetNextItemWidth(280.f);
+        if (ImGui::InputTextWithHint("##itemsearch", "search items (e.g. omen, mageblood)...",
+                                     buf, sizeof(buf)))
+            m_itemSearch = buf;
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear selected")) m_settings.selectedItems.clear();
+
+        ImGui::BeginChild("deferitemlist", ImVec2(0.f, 220.f), ImGuiChildFlags_Borders);
+        for (const auto& cat : m_prices.categories) {
+            bool headerShown = false;
+            for (const auto& name : cat.second) {
+                if (!m_itemSearch.empty()
+                    && !RitualHelper::ContainsCI(name, m_itemSearch.c_str()))
+                    continue;
+                if (!headerShown) {
+                    ImGui::SeparatorText(cat.first.c_str());
+                    headerShown = true;
+                }
+                bool on = false;
+                for (const auto& s : m_settings.selectedItems)
+                    if (s == name) { on = true; break; }
+                ImGui::PushID(name.c_str());
+                if (ImGui::Checkbox(name.c_str(), &on)) {
+                    if (on) {
+                        m_settings.selectedItems.push_back(name);
+                    } else {
+                        m_settings.selectedItems.erase(
+                            std::remove(m_settings.selectedItems.begin(),
+                                        m_settings.selectedItems.end(), name),
+                            m_settings.selectedItems.end());
+                    }
+                }
+                auto pIt = m_prices.priceExalted.find(name);
+                if (pIt != m_prices.priceExalted.end() && pIt->second > 0.0) {
+                    ImGui::SameLine();
+                    char val[32];
+                    FormatValueLocked(val, sizeof(val), pIt->second);
+                    ImGui::TextDisabled("(%s)", val);
+                }
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndChild();
+    }
+
+    void DrawNameRules() {
+        char header[96];
+        std::snprintf(header, sizeof(header), "Name rules (%zu)###name_rules",
+                      m_settings.deferRules.size());
+        if (!ImGui::TreeNode(header)) return;
+        ImGui::TextDisabled("Extra substring matches, e.g. 'omen' catches every omen:");
+        int removeAt = -1;
+        for (int i = 0; i < static_cast<int>(m_settings.deferRules.size()); ++i) {
+            ImGui::PushID(i);
+            if (ImGui::SmallButton("X")) removeAt = i;
+            ImGui::SameLine();
+            ImGui::TextUnformatted(m_settings.deferRules[i].c_str());
+            ImGui::PopID();
+        }
+        if (removeAt >= 0)
+            m_settings.deferRules.erase(m_settings.deferRules.begin() + removeAt);
+
+        ImGui::SetNextItemWidth(240.f);
+        const bool entered = ImGui::InputText("##newrule", m_ruleBuf, sizeof(m_ruleBuf),
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        if ((ImGui::Button("Add rule") || entered) && m_ruleBuf[0] != '\0') {
+            m_settings.deferRules.push_back(m_ruleBuf);
+            m_ruleBuf[0] = '\0';
+        }
+        ImGui::TreePop();
     }
 
 private:
@@ -298,6 +352,7 @@ private:
     Clock::time_point m_lastBottomPoll{};
     Clock::time_point m_dryFlashUntil{};
     std::string m_lastDumpPath;
+    std::string m_itemSearch;
     char m_ruleBuf[96] = {};
 
     std::thread m_fetchThread;
@@ -326,18 +381,19 @@ private:
         });
     }
 
-    void FormatValue(char* out, size_t n, double valueEx) {
-        double divPrice = 0.0;
-        {
-            std::lock_guard<std::mutex> lk(m_fetchMutex);
-            divPrice = m_prices.divinePrice;
-        }
+    void FormatValueLocked(char* out, size_t n, double valueEx) {
+        const double divPrice = m_prices.divinePrice;
         if (divPrice > 0.0 && valueEx >= divPrice * 0.95)
             std::snprintf(out, n, "%.1f div", valueEx / divPrice);
         else if (valueEx >= 10.0)
             std::snprintf(out, n, "%.0f ex", valueEx);
         else
             std::snprintf(out, n, "%.2f ex", valueEx);
+    }
+
+    void FormatValue(char* out, size_t n, double valueEx) {
+        std::lock_guard<std::mutex> lk(m_fetchMutex);
+        FormatValueLocked(out, n, valueEx);
     }
 
     void FrameTick() {
@@ -399,8 +455,8 @@ private:
             {
                 std::lock_guard<std::mutex> lk(m_fetchMutex);
                 m_matches = RitualHelper::MatchDeferItems(
-                    *m_window, m_settings.deferRules, m_prices.priceExalted,
-                    m_settings.minValueExalted);
+                    *m_window, m_settings.selectedItems, m_settings.deferRules,
+                    m_prices.priceExalted, m_settings.minValueExalted);
             }
         } else {
             m_uiHits.clear();

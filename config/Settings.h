@@ -21,12 +21,25 @@ struct Settings {
     bool debugMode = false;
     int  scanIntervalMs = 400;
 
-    bool dryRun = true;
+    bool dryRun = false;
     std::vector<std::string> deferRules;
+    std::vector<std::string> selectedItems;
     int  minValueExalted = 0;
 
     std::filesystem::path SettingsPath(const std::filesystem::path& dir) const {
         return dir / "config" / "settings.json";
+    }
+
+    static void LoadStringVec(const nlohmann::json& j, const char* key,
+                              std::vector<std::string>& out) {
+        if (!j.contains(key) || !j[key].is_array()) return;
+        out.clear();
+        for (const auto& e : j[key]) {
+            if (!e.is_string()) continue;
+            std::string s = e.get<std::string>();
+            if (s.empty() || s.size() > 96) continue;
+            out.push_back(std::move(s));
+        }
     }
 
     void Load(const std::filesystem::path& dir) {
@@ -46,15 +59,8 @@ struct Settings {
             dryRun = j.value("dry_run", dryRun);
             minValueExalted = std::clamp(j.value("min_value_exalted", minValueExalted),
                                          0, kMinValueMax);
-            if (j.contains("defer_rules") && j["defer_rules"].is_array()) {
-                deferRules.clear();
-                for (const auto& e : j["defer_rules"]) {
-                    if (!e.is_string()) continue;
-                    std::string s = e.get<std::string>();
-                    if (s.empty() || s.size() > 96) continue;
-                    deferRules.push_back(std::move(s));
-                }
-            }
+            LoadStringVec(j, "defer_rules", deferRules);
+            LoadStringVec(j, "selected_items", selectedItems);
         } catch (...) {}
     }
 
@@ -69,6 +75,7 @@ struct Settings {
             j["scan_interval_ms"] = scanIntervalMs;
             j["dry_run"] = dryRun;
             j["defer_rules"] = deferRules;
+            j["selected_items"] = selectedItems;
             j["min_value_exalted"] = minValueExalted;
             const std::string text = j.dump(2);
             std::ofstream out(SettingsPath(dir));

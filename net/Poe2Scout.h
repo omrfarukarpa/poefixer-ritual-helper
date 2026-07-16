@@ -2,10 +2,13 @@
 
 #include "../third_party/json.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <Windows.h>
 #include <winhttp.h>
@@ -18,6 +21,7 @@ struct PriceResult {
     std::string league;
     double divinePrice = 0.0;
     std::unordered_map<std::string, double> priceExalted;
+    std::vector<std::pair<std::string, std::vector<std::string>>> categories;
 };
 
 class Poe2Scout {
@@ -40,7 +44,7 @@ public:
             const std::string path = "/api/poe2/Leagues/" + Encode(r.league) +
                                      "/Currencies/ByCategory?Category=" + cat +
                                      "&PerPage=250&Page=1";
-            if (Get(path, body, abort) && ParseItems(body, "Text", r)) ++okCount;
+            if (Get(path, body, abort) && ParseItems(body, "Text", cat, r)) ++okCount;
         }
 
         static const char* kUniqueCats[] = {
@@ -49,6 +53,7 @@ public:
         int uniqueCount = 0;
         for (const char* cat : kUniqueCats) {
             if (Aborted(abort)) break;
+            const std::string label = std::string("unique ") + cat;
             for (int page = 1; page <= 4; ++page) {
                 std::string body;
                 const std::string path = "/api/poe2/Leagues/" + Encode(r.league) +
@@ -56,11 +61,14 @@ public:
                                          "&PerPage=250&Page=" + std::to_string(page);
                 if (!Get(path, body, abort)) break;
                 int pages = 0;
-                if (!ParseItems(body, "Name", r, &pages)) break;
+                if (!ParseItems(body, "Name", label.c_str(), r, &pages)) break;
                 ++uniqueCount;
                 if (page >= pages) break;
             }
         }
+
+        for (auto& c : r.categories)
+            std::sort(c.second.begin(), c.second.end());
 
         r.ok = okCount > 0;
         if (!r.ok) {
@@ -161,17 +169,27 @@ private:
         }
     }
 
-    static bool ParseItems(const std::string& body, const char* nameKey, PriceResult& r,
-                           int* pagesOut = nullptr) {
+    static bool ParseItems(const std::string& body, const char* nameKey, const char* category,
+                           PriceResult& r, int* pagesOut = nullptr) {
         nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
         if (j.is_discarded() || !j.is_object() || !j.contains("Items")) return false;
         if (pagesOut) *pagesOut = j.value("Pages", 1);
         const auto& items = j["Items"];
         if (!items.is_array()) return false;
+
+        std::vector<std::string>* names = nullptr;
+        for (auto& c : r.categories)
+            if (c.first == category) { names = &c.second; break; }
+        if (!names) {
+            r.categories.emplace_back(category, std::vector<std::string>());
+            names = &r.categories.back().second;
+        }
+
         for (const auto& it : items) {
             if (!it.is_object()) continue;
             const std::string name = it.value(nameKey, std::string());
             if (name.empty()) continue;
+            names->push_back(name);
             if (it.contains("CurrentPrice") && it["CurrentPrice"].is_number())
                 r.priceExalted[name] = it["CurrentPrice"].get<double>();
         }
