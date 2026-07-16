@@ -23,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "0.3.1";
+inline constexpr const char* kRitualHelperVersion    = "1.0.0";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -191,34 +191,43 @@ public:
                          RitualHelperConfig::kScanIntervalMaxMs);
 
         DrawItemPicker();
-        DrawNameRules();
 
         ImGui::SeparatorText("Value defer (poe2scout)");
         ImGui::TextWrapped("Also defer any revealed item whose live poe2scout price "
-                           "(currency, omens, uniques) is at least this many exalted. "
-                           "0 = off.");
+                           "is at least this value. 0 = off.");
         {
             char buf[16];
-            std::snprintf(buf, sizeof(buf), "%d", m_settings.minValueExalted);
+            std::snprintf(buf, sizeof(buf), "%d", m_settings.minValue);
             ImGui::SetNextItemWidth(110.f);
-            if (ImGui::InputText("Min value (exalted)", buf, sizeof(buf),
+            if (ImGui::InputText("Min value", buf, sizeof(buf),
                                  ImGuiInputTextFlags_CharsDecimal)) {
                 const int nv = buf[0] ? std::atoi(buf) : 0;
-                m_settings.minValueExalted =
+                m_settings.minValue =
                     nv < 0 ? 0 : (nv > RitualHelperConfig::kMinValueMax
                                       ? RitualHelperConfig::kMinValueMax : nv);
             }
         }
+        ImGui::SameLine();
+        static const char* kUnits[] = {"Exalted", "Divine"};
+        ImGui::SetNextItemWidth(100.f);
+        ImGui::Combo("##valunit", &m_settings.minValueUnit, kUnits, 2);
         {
             std::lock_guard<std::mutex> lk(m_fetchMutex);
-            if (m_settings.minValueExalted > 0 && m_prices.divinePrice > 0.0) {
+            if (m_settings.minValue > 0 && m_prices.divinePrice > 0.0) {
                 ImGui::SameLine();
-                ImGui::TextDisabled("= %.2f divine",
-                                    m_settings.minValueExalted / m_prices.divinePrice);
+                if (m_settings.minValueUnit == RitualHelperConfig::kValueUnitDivine)
+                    ImGui::TextDisabled("= %.0f ex",
+                                        m_settings.minValue * m_prices.divinePrice);
+                else
+                    ImGui::TextDisabled("= %.2f div",
+                                        m_settings.minValue / m_prices.divinePrice);
             }
             ImGui::TextDisabled("Prices: %s", m_fetchStatus.c_str());
         }
-        if (ImGui::Button(m_fetching ? "Refreshing..." : "Refresh prices") && !m_fetching)
+        ImGui::SliderInt("Auto refresh (minutes)", &m_settings.priceRefreshMinutes,
+                         RitualHelperConfig::kRefreshMinMinutes,
+                         RitualHelperConfig::kRefreshMaxMinutes);
+        if (ImGui::Button(m_fetching ? "Refreshing..." : "Refresh now") && !m_fetching)
             StartFetch();
 
         ImGui::SeparatorText("Debug");
@@ -308,33 +317,6 @@ public:
         ImGui::EndChild();
     }
 
-    void DrawNameRules() {
-        char header[96];
-        std::snprintf(header, sizeof(header), "Name rules (%zu)###name_rules",
-                      m_settings.deferRules.size());
-        if (!ImGui::TreeNode(header)) return;
-        ImGui::TextDisabled("Extra substring matches, e.g. 'omen' catches every omen:");
-        int removeAt = -1;
-        for (int i = 0; i < static_cast<int>(m_settings.deferRules.size()); ++i) {
-            ImGui::PushID(i);
-            if (ImGui::SmallButton("X")) removeAt = i;
-            ImGui::SameLine();
-            ImGui::TextUnformatted(m_settings.deferRules[i].c_str());
-            ImGui::PopID();
-        }
-        if (removeAt >= 0)
-            m_settings.deferRules.erase(m_settings.deferRules.begin() + removeAt);
-
-        ImGui::SetNextItemWidth(240.f);
-        const bool entered = ImGui::InputText("##newrule", m_ruleBuf, sizeof(m_ruleBuf),
-                                              ImGuiInputTextFlags_EnterReturnsTrue);
-        ImGui::SameLine();
-        if ((ImGui::Button("Add rule") || entered) && m_ruleBuf[0] != '\0') {
-            m_settings.deferRules.push_back(m_ruleBuf);
-            m_ruleBuf[0] = '\0';
-        }
-        ImGui::TreePop();
-    }
 
 private:
     Settings m_settings;
@@ -353,7 +335,6 @@ private:
     Clock::time_point m_dryFlashUntil{};
     std::string m_lastDumpPath;
     std::string m_itemSearch;
-    char m_ruleBuf[96] = {};
 
     std::thread m_fetchThread;
     std::atomic<bool> m_fetching{false};
@@ -361,11 +342,14 @@ private:
     std::mutex m_fetchMutex;
     RitualHelper::PriceResult m_prices;
     std::string m_fetchStatus = "not fetched yet";
+    Clock::time_point m_nextAutoFetch{};
 
     void StartFetch() {
         if (m_fetching.exchange(true)) return;
         if (m_fetchThread.joinable()) m_fetchThread.join();
         m_fetchAbort = false;
+        m_nextAutoFetch = Clock::now()
+                          + std::chrono::minutes(m_settings.priceRefreshMinutes);
         {
             std::lock_guard<std::mutex> lk(m_fetchMutex);
             m_fetchStatus = "fetching...";
@@ -397,6 +381,8 @@ private:
     }
 
     void FrameTick() {
+        if (!m_fetching && Clock::now() > m_nextAutoFetch)
+            StartFetch();
         if (!m_defer.IsRunning()) return;
         const auto now = Clock::now();
         if (m_window && now - m_lastBottomPoll > std::chrono::milliseconds(100)) {
@@ -454,9 +440,13 @@ private:
             m_toggle = RitualHelper::FindDeferToggle(all, *m_window);
             {
                 std::lock_guard<std::mutex> lk(m_fetchMutex);
+                double minEx = static_cast<double>(m_settings.minValue);
+                if (m_settings.minValueUnit == RitualHelperConfig::kValueUnitDivine)
+                    minEx = m_prices.divinePrice > 0.0
+                                ? minEx * m_prices.divinePrice : 0.0;
                 m_matches = RitualHelper::MatchDeferItems(
-                    *m_window, m_settings.selectedItems, m_settings.deferRules,
-                    m_prices.priceExalted, m_settings.minValueExalted);
+                    *m_window, m_settings.selectedItems,
+                    m_prices.priceExalted, minEx);
             }
         } else {
             m_uiHits.clear();

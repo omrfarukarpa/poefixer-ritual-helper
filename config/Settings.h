@@ -14,6 +14,10 @@ inline constexpr int kScanIntervalMinMs = 150;
 inline constexpr int kScanIntervalMaxMs = 2000;
 
 inline constexpr int kMinValueMax = 10000000;
+inline constexpr int kValueUnitExalted = 0;
+inline constexpr int kValueUnitDivine = 1;
+inline constexpr int kRefreshMinMinutes = 15;
+inline constexpr int kRefreshMaxMinutes = 60;
 
 struct Settings {
     bool enabled = true;
@@ -22,9 +26,10 @@ struct Settings {
     int  scanIntervalMs = 400;
 
     bool dryRun = false;
-    std::vector<std::string> deferRules;
     std::vector<std::string> selectedItems;
-    int  minValueExalted = 0;
+    int  minValue = 0;
+    int  minValueUnit = kValueUnitExalted;
+    int  priceRefreshMinutes = 30;
 
     std::filesystem::path SettingsPath(const std::filesystem::path& dir) const {
         return dir / "config" / "settings.json";
@@ -57,9 +62,12 @@ struct Settings {
             scanIntervalMs = std::clamp(j.value("scan_interval_ms", scanIntervalMs),
                                         kScanIntervalMinMs, kScanIntervalMaxMs);
             dryRun = j.value("dry_run", dryRun);
-            minValueExalted = std::clamp(j.value("min_value_exalted", minValueExalted),
-                                         0, kMinValueMax);
-            LoadStringVec(j, "defer_rules", deferRules);
+            minValue = std::clamp(j.value("min_value", j.value("min_value_exalted", 0)),
+                                  0, kMinValueMax);
+            minValueUnit = std::clamp(j.value("min_value_unit", minValueUnit),
+                                      kValueUnitExalted, kValueUnitDivine);
+            priceRefreshMinutes = std::clamp(j.value("price_refresh_minutes", priceRefreshMinutes),
+                                             kRefreshMinMinutes, kRefreshMaxMinutes);
             LoadStringVec(j, "selected_items", selectedItems);
         } catch (...) {}
     }
@@ -74,9 +82,10 @@ struct Settings {
             j["debug_mode"] = debugMode;
             j["scan_interval_ms"] = scanIntervalMs;
             j["dry_run"] = dryRun;
-            j["defer_rules"] = deferRules;
             j["selected_items"] = selectedItems;
-            j["min_value_exalted"] = minValueExalted;
+            j["min_value"] = minValue;
+            j["min_value_unit"] = minValueUnit;
+            j["price_refresh_minutes"] = priceRefreshMinutes;
             const std::string text = j.dump(2);
             std::ofstream out(SettingsPath(dir));
             if (out.is_open()) out << text;

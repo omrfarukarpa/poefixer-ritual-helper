@@ -24,8 +24,7 @@ inline bool EqualsCI(const std::string& a, const std::string& b) {
 
 inline std::vector<RitualItem> MatchDeferItems(
     const RitualWindow& win, const std::vector<std::string>& selectedItems,
-    const std::vector<std::string>& rules,
-    const std::unordered_map<std::string, double>& priceExalted, int minValueEx) {
+    const std::unordered_map<std::string, double>& priceExalted, double minValueEx) {
     std::vector<RitualItem> out;
     for (const auto& it : win.items) {
         if (IsHiddenItem(it)) continue;
@@ -37,13 +36,7 @@ inline std::vector<RitualItem> MatchDeferItems(
         bool matched = false;
         for (const auto& s : selectedItems)
             if (EqualsCI(it.name, s)) { matched = true; break; }
-        if (!matched) {
-            for (const auto& r : rules) {
-                if (r.empty()) continue;
-                if (ContainsCI(it.name, r.c_str())) { matched = true; break; }
-            }
-        }
-        if (!matched && minValueEx > 0 && value >= static_cast<double>(minValueEx))
+        if (!matched && minValueEx > 0.0 && value >= minValueEx)
             matched = true;
 
         if (matched) {
