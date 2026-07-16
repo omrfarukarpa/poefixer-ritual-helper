@@ -88,6 +88,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="config\Settings.h" />
+    <ClInclude Include="game\DeferPlanner.h" />
+    <ClInclude Include="game\DeferState.h" />
+    <ClInclude Include="input\Win32Input.h" />
+    <ClInclude Include="overlay\DeferButtonOverlay.h" />
     <ClInclude Include="game\RitualScanner.h" />
     <ClInclude Include="game\RitualUi.h" />
     <ClInclude Include="sdk\PluginAbi.h" />

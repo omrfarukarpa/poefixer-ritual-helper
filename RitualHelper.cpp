@@ -1,8 +1,11 @@
 #include "sdk/PluginSDK.h"
 
 #include "config/Settings.h"
+#include "game/DeferPlanner.h"
+#include "game/DeferState.h"
 #include "game/RitualScanner.h"
 #include "game/RitualUi.h"
+#include "overlay/DeferButtonOverlay.h"
 
 #include <imgui.h>
 
@@ -14,7 +17,7 @@
 #include <string>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "0.1.1";
+inline constexpr const char* kRitualHelperVersion    = "0.2.0";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -40,10 +43,16 @@ public:
         m_settings.Load(DirectoryPath());
         m_loaded = true;
         m_lastScan = Clock::now() - std::chrono::milliseconds(m_settings.scanIntervalMs);
+        auto& events = const_cast<PluginSDK::EventsService&>(ctx()->Events);
+        m_frameTok = events.OnFrame([this] { FrameTick(); });
         ctx()->Log.Info("Ritual Helper plugin enabled");
     }
 
     void OnDisable() override {
+        auto& events = const_cast<PluginSDK::EventsService&>(ctx()->Events);
+        if (m_frameTok.Valid()) events.Unsubscribe(m_frameTok);
+        m_frameTok = {};
+        ctx()->Overlay.SetWantsOverlayInput(false);
         m_window.reset();
         m_uiHits.clear();
         SaveSettings();
@@ -63,7 +72,11 @@ public:
 
         const ImVec2 disp = ImGui::GetIO().DisplaySize;
         RefreshIfNeeded(disp.x, disp.y);
-        if (!m_window) return;
+        if (!m_window) {
+            ctx()->Overlay.SetWantsOverlayInput(false);
+            m_hwClick.Reset();
+            return;
+        }
 
         ImDrawList* dl = ImGui::GetForegroundDrawList();
 
@@ -71,20 +84,75 @@ public:
             for (const auto& it : m_window->items) {
                 const ImVec2 a(it.rect.x + 1.f, it.rect.y + 1.f);
                 const ImVec2 b(it.rect.x + it.rect.w - 1.f, it.rect.y + it.rect.h - 1.f);
-                dl->AddRect(a, b, IM_COL32(80, 220, 255, 230), 0.f, 0, 2.f);
+                dl->AddRect(a, b, IM_COL32(80, 220, 255, 200), 0.f, 0, 2.f);
             }
         }
 
-        char status[192];
+        const bool dryFlash = Clock::now() < m_dryFlashUntil;
+        for (const auto& it : m_matches) {
+            const ImVec2 a(it.rect.x + 3.f, it.rect.y + 3.f);
+            const ImVec2 b(it.rect.x + it.rect.w - 3.f, it.rect.y + it.rect.h - 3.f);
+            dl->AddRect(a, b, IM_COL32(255, 170, 40, 255), 0.f, 0, dryFlash ? 4.f : 2.5f);
+        }
+
+        DrawDeferButton();
+
+        char status[224];
         std::snprintf(status, sizeof(status),
-                      "Ritual Helper: window='%s' items=%zu | UI hits=%zu",
-                      m_window->name.c_str(), m_window->items.size(), m_uiHits.size());
+                      "Ritual Helper: '%s' items=%zu matched=%zu%s%s",
+                      m_window->name.c_str(), m_window->items.size(), m_matches.size(),
+                      m_defer.Status().empty() ? "" : " | ",
+                      m_defer.Status().c_str());
         const ImVec2 pos(14.f, 58.f);
         const ImVec2 sz = ImGui::CalcTextSize(status);
         dl->AddRectFilled(ImVec2(pos.x - 4, pos.y - 2),
                           ImVec2(pos.x + sz.x + 4, pos.y + sz.y + 2),
                           IM_COL32(0, 0, 0, 200), 3.f);
         dl->AddText(pos, IM_COL32(120, 230, 255, 255), status);
+
+        if (dryFlash) {
+            char dry[128];
+            std::snprintf(dry, sizeof(dry), "DRY RUN: would defer %zu item(s) - no clicks sent",
+                          m_matches.size());
+            dl->AddText(ImVec2(pos.x, pos.y + sz.y + 8.f),
+                        IM_COL32(255, 170, 40, 255), dry);
+        }
+    }
+
+    void DrawDeferButton() {
+        if (m_defer.IsRunning()) {
+            ctx()->Overlay.SetWantsOverlayInput(false);
+            m_hwClick.Reset();
+            return;
+        }
+        if (m_matches.empty() || (!m_toggle && m_bottom.mode == RitualHelper::BottomButtonMode::None)) {
+            ctx()->Overlay.SetWantsOverlayInput(false);
+            m_hwClick.Reset();
+            return;
+        }
+
+        ImVec2 pos;
+        if (m_toggle) {
+            pos = ImVec2(m_toggle->x - RitualHelperOverlay::kButtonW - 12.f,
+                         m_toggle->y + (m_toggle->h - RitualHelperOverlay::kButtonH) * 0.5f);
+        } else {
+            pos = ImVec2(m_window->gridX + static_cast<float>(m_window->totalBoxesX) * m_window->cellSize
+                             - RitualHelperOverlay::kButtonW,
+                         m_window->gridY - 44.f);
+        }
+
+        char label[32];
+        std::snprintf(label, sizeof(label), "%s (%zu)",
+                      m_settings.dryRun ? "DRY DEFER" : "DEFER", m_matches.size());
+
+        const ImVec2 p1(pos.x + RitualHelperOverlay::kButtonW,
+                        pos.y + RitualHelperOverlay::kButtonH);
+        const bool over = RitualHelperOverlay::HitRect(ImGui::GetIO().MousePos, pos, p1);
+        ctx()->Overlay.SetWantsOverlayInput(over);
+
+        const auto r = RitualHelperOverlay::DrawOverlayButton(pos, label, "##ritual_defer");
+        const bool hw = m_hwClick.Update(true, r.btnP0, r.btnP1);
+        if (r.clicked || hw) StartDefer();
     }
 
     void DrawSettings() override {
@@ -98,15 +166,49 @@ public:
         ImGui::Checkbox("Show overlay", &m_settings.showOverlay);
 
         ImGui::TextWrapped(
-            "Phase 0 (discovery): detects the Ritual 'Favours' window, outlines its "
-            "items and finds the defer/reroll UI elements. Open a ritual Favours "
-            "window in-game and use the dump below; defer/reroll automation comes "
-            "next, built on what the dump proves.");
+            "With a Favours window open, matching items get an orange outline and a "
+            "DEFER button appears next to the hourglass. It enters defer mode, "
+            "clicks the matched items and applies - right-click cancels a run.");
 
         ImGui::Checkbox("Outline ritual items", &m_settings.highlightItems);
         ImGui::SliderInt("Scan interval (ms)", &m_settings.scanIntervalMs,
                          RitualHelperConfig::kScanIntervalMinMs,
                          RitualHelperConfig::kScanIntervalMaxMs);
+
+        ImGui::SeparatorText("Defer rules");
+        ImGui::Checkbox("Dry run (no clicks, just show what would be deferred)",
+                        &m_settings.dryRun);
+        if (m_settings.dryRun) {
+            ImGui::TextDisabled("Safe mode: the DEFER button only highlights + logs.");
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(230, 190, 90, 255));
+            ImGui::TextWrapped("Live mode: the DEFER button sends real clicks (enters "
+                               "defer mode, clicks matched items, applies).");
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::TextDisabled("An item is deferred when its name contains any rule text:");
+        int removeAt = -1;
+        for (int i = 0; i < static_cast<int>(m_settings.deferRules.size()); ++i) {
+            ImGui::PushID(i);
+            if (ImGui::SmallButton("X")) removeAt = i;
+            ImGui::SameLine();
+            ImGui::TextUnformatted(m_settings.deferRules[i].c_str());
+            ImGui::PopID();
+        }
+        if (removeAt >= 0)
+            m_settings.deferRules.erase(m_settings.deferRules.begin() + removeAt);
+
+        ImGui::SetNextItemWidth(240.f);
+        const bool entered = ImGui::InputText("##newrule", m_ruleBuf, sizeof(m_ruleBuf),
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        if ((ImGui::Button("Add rule") || entered) && m_ruleBuf[0] != '\0') {
+            m_settings.deferRules.push_back(m_ruleBuf);
+            m_ruleBuf[0] = '\0';
+        }
+        if (m_settings.deferRules.empty())
+            ImGui::TextDisabled("No rules yet. Example: add 'omen' or 'Deathrattle'.");
 
         ImGui::SeparatorText("Status");
         if (m_window) {
@@ -144,8 +246,60 @@ private:
 
     std::optional<RitualHelper::RitualWindow> m_window;
     std::vector<RitualHelper::UiElement> m_uiHits;
+    std::vector<RitualHelper::RitualItem> m_matches;
+    RitualHelper::BottomButton m_bottom;
+    std::optional<RitualHelper::UiElement> m_toggle;
+    RitualHelper::DeferState m_defer;
+    RitualHelperOverlay::HardwareClick m_hwClick;
+    PluginSDK::EventsService::Token m_frameTok;
     Clock::time_point m_lastScan{};
+    Clock::time_point m_lastBottomPoll{};
+    Clock::time_point m_dryFlashUntil{};
     std::string m_lastDumpPath;
+    char m_ruleBuf[96] = {};
+
+    void FrameTick() {
+        if (!m_defer.IsRunning()) return;
+        const auto now = Clock::now();
+        if (m_window && now - m_lastBottomPoll > std::chrono::milliseconds(100)) {
+            m_lastBottomPoll = now;
+            const auto texts = RitualHelper::CollectUiTexts(ctx());
+            m_bottom = RitualHelper::FindBottomButton(texts, *m_window);
+        }
+        m_defer.Tick(m_bottom, ctx()->Game.IsForeground());
+    }
+
+    void StartDefer() {
+        if (!m_window || m_matches.empty()) return;
+
+        if (m_settings.dryRun) {
+            std::string names;
+            for (const auto& it : m_matches) {
+                if (!names.empty()) names += ", ";
+                names += it.name;
+            }
+            ctx()->Log.Info(("[Ritual Helper] DRY RUN - would defer: " + names).c_str());
+            m_dryFlashUntil = Clock::now() + std::chrono::milliseconds(3000);
+            return;
+        }
+
+        const bool alreadyDeferMode =
+            m_bottom.mode == RitualHelper::BottomButtonMode::DeferItem;
+        if (!alreadyDeferMode && !m_toggle) {
+            ctx()->Log.Warn("[Ritual Helper] defer toggle button not found - aborted");
+            return;
+        }
+
+        RitualHelper::ScreenRect toggle;
+        if (m_toggle)
+            toggle = RitualHelper::ScreenRect{m_toggle->x, m_toggle->y, m_toggle->w, m_toggle->h};
+
+        std::vector<RitualHelper::ScreenRect> rects;
+        rects.reserve(m_matches.size());
+        for (const auto& it : m_matches) rects.push_back(it.rect);
+
+        m_defer.Start(alreadyDeferMode, toggle, std::move(rects));
+    }
 
     void RefreshIfNeeded(float w, float h) {
         const auto now = Clock::now();
@@ -156,10 +310,16 @@ private:
 
         m_window = RitualHelper::FindRitualWindow(ctx(), w, h);
         if (m_window) {
-            const auto all = RitualHelper::CollectUiTexts(ctx());
+            const auto all = RitualHelper::CollectUiTexts(ctx(), true);
             m_uiHits = RitualHelper::FindRitualUiElements(all);
+            m_bottom = RitualHelper::FindBottomButton(all, *m_window);
+            m_toggle = RitualHelper::FindDeferToggle(all, *m_window);
+            m_matches = RitualHelper::MatchDeferItems(*m_window, m_settings.deferRules);
         } else {
             m_uiHits.clear();
+            m_matches.clear();
+            m_bottom = {};
+            m_toggle.reset();
         }
     }
 
