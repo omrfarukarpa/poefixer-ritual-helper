@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "0.1.0";
+inline constexpr const char* kRitualHelperVersion    = "0.1.1";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -169,7 +169,16 @@ private:
         std::string s = "[Ritual Helper] discovery dump\n\n";
         s += RitualHelper::BuildInventoryDump(ctx(), disp.x, disp.y);
         s += "\n";
-        const auto all = RitualHelper::CollectUiTexts(ctx());
+        const auto all = RitualHelper::CollectUiTexts(ctx(), true);
+        const auto win = RitualHelper::FindRitualWindow(ctx(), disp.x, disp.y);
+        if (win && win->cellSize > 0.f) {
+            const float headerPad = 280.f;
+            s += RitualHelper::BuildRegionDump(
+                all, win->gridX, win->gridY - headerPad,
+                static_cast<float>(win->totalBoxesX) * win->cellSize,
+                static_cast<float>(win->totalBoxesY) * win->cellSize + headerPad);
+            s += "\n";
+        }
         s += RitualHelper::BuildUiDump(all);
 
         try {

@@ -84,6 +84,9 @@ struct RitualWindow {
     std::string name;
     int totalBoxesX = 0;
     int totalBoxesY = 0;
+    float gridX = 0.f;
+    float gridY = 0.f;
+    float cellSize = 0.f;
     std::vector<RitualItem> items;
 };
 
@@ -101,6 +104,9 @@ inline std::optional<RitualWindow> FindRitualWindow(const PluginSDK::Context* ct
         w.name = name;
         w.totalBoxesX = inv.TotalBoxesX;
         w.totalBoxesY = inv.TotalBoxesY;
+        w.gridX = inv.Grid.GridScreenX;
+        w.gridY = inv.Grid.GridScreenY;
+        w.cellSize = inv.Grid.CellSize;
         for (const auto& item : inv.Items) {
             auto r = ResolveItemRect(inv, item, displayW, displayH);
             if (!r) continue;

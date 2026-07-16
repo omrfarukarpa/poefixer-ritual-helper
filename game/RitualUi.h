@@ -34,7 +34,8 @@ struct UiElement {
     int childCount = 0;
 };
 
-inline std::vector<UiElement> CollectUiTexts(const PluginSDK::Context* ctx) {
+inline std::vector<UiElement> CollectUiTexts(const PluginSDK::Context* ctx,
+                                             bool includeTextless = false) {
     std::vector<UiElement> out;
     if (!ctx) return out;
     const uintptr_t root = ctx->Ui.GetGameUiRoot();
@@ -55,14 +56,16 @@ inline std::vector<UiElement> CollectUiTexts(const PluginSDK::Context* ctx) {
         const auto children = ctx->Ui.GetChildren(addr);
         std::string t = ctx->Ui.GetText(addr);
         std::string sid = ctx->Ui.GetStringId(addr);
-        if ((!t.empty() && t.size() < 160) || !sid.empty()) {
+        const bool hasContent = (!t.empty() && t.size() < 160) || !sid.empty();
+        if (hasContent || includeTextless) {
             UiElement e;
             e.text = std::move(t);
             e.stringId = std::move(sid);
             ctx->Ui.ComputeScreenRect(addr, e.x, e.y, e.w, e.h);
             e.depth = depth;
             e.childCount = static_cast<int>(children.size());
-            out.push_back(std::move(e));
+            if (hasContent || (e.w > 0.f && e.h > 0.f))
+                out.push_back(std::move(e));
         }
         for (const uintptr_t c : children)
             if (c) stack.push_back({c, depth + 1});
@@ -92,6 +95,30 @@ inline std::vector<UiElement> FindRitualUiElements(const std::vector<UiElement>&
     for (const auto& e : all)
         if (MatchesRitualKeyword(e)) out.push_back(e);
     return out;
+}
+
+inline std::string BuildRegionDump(const std::vector<UiElement>& all,
+                                   float rx, float ry, float rw, float rh) {
+    std::string s = "=== elements inside ritual window region ===\n";
+    char line[384];
+    int shown = 0;
+    const float margin = 90.f;
+    for (const auto& e : all) {
+        if (e.w <= 0.f || e.h <= 0.f) continue;
+        if (e.w > rw + 2.f * margin || e.h > rh + 2.f * margin) continue;
+        const float cx = e.x + e.w * 0.5f;
+        const float cy = e.y + e.h * 0.5f;
+        if (cx < rx - margin || cx > rx + rw + margin) continue;
+        if (cy < ry - margin || cy > ry + rh + margin) continue;
+        std::snprintf(line, sizeof(line),
+                      "d=%d kids=%d rect=%.0f,%.0f %.0fx%.0f id='%s' text='%s'\n",
+                      e.depth, e.childCount, e.x, e.y, e.w, e.h,
+                      e.stringId.c_str(), e.text.c_str());
+        s += line;
+        if (++shown >= 220) { s += "(more truncated)\n"; break; }
+    }
+    if (shown == 0) s += "(none)\n";
+    return s;
 }
 
 inline std::string BuildUiDump(const std::vector<UiElement>& all) {
