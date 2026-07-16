@@ -1,0 +1,10 @@
+bin/
+obj/
+*.user
+.vs/
+CLAUDE.md
+AGENTS.md
+.claude/
+TESTING.md
+docs/
+config/settings.json
