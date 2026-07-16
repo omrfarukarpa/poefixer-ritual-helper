@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace RitualHelper {
@@ -14,18 +15,29 @@ inline bool IsHiddenItem(const RitualItem& it) {
     return it.name == "Hidden Item";
 }
 
-inline std::vector<RitualItem> MatchDeferItems(const RitualWindow& win,
-                                               const std::vector<std::string>& rules) {
+inline std::vector<RitualItem> MatchDeferItems(
+    const RitualWindow& win, const std::vector<std::string>& rules,
+    const std::unordered_map<std::string, double>& priceExalted, int minValueEx) {
     std::vector<RitualItem> out;
-    if (rules.empty()) return out;
     for (const auto& it : win.items) {
         if (IsHiddenItem(it)) continue;
+
+        double value = 0.0;
+        auto pIt = priceExalted.find(it.name);
+        if (pIt != priceExalted.end()) value = pIt->second;
+
+        bool matched = false;
         for (const auto& r : rules) {
             if (r.empty()) continue;
-            if (ContainsCI(it.name, r.c_str())) {
-                out.push_back(it);
-                break;
-            }
+            if (ContainsCI(it.name, r.c_str())) { matched = true; break; }
+        }
+        if (!matched && minValueEx > 0 && value >= static_cast<double>(minValueEx))
+            matched = true;
+
+        if (matched) {
+            RitualItem copy = it;
+            copy.valueEx = value;
+            out.push_back(std::move(copy));
         }
     }
     return out;

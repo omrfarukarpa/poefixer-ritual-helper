@@ -76,6 +76,7 @@ inline std::optional<ScreenRect> ResolveItemRect(const PluginSDK::Inventory& inv
 struct RitualItem {
     std::string name;
     int stack = 0;
+    double valueEx = 0.0;
     ScreenRect rect;
 };
 

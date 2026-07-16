@@ -5,19 +5,24 @@
 #include "game/DeferState.h"
 #include "game/RitualScanner.h"
 #include "game/RitualUi.h"
+#include "net/Poe2Scout.h"
 #include "overlay/DeferButtonOverlay.h"
 
 #include <imgui.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "0.2.0";
+inline constexpr const char* kRitualHelperVersion    = "0.3.0";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -25,6 +30,11 @@ using Clock = std::chrono::steady_clock;
 
 class RitualHelperPlugin : public PluginSDK::Plugin {
 public:
+    ~RitualHelperPlugin() override {
+        m_fetchAbort = true;
+        if (m_fetchThread.joinable()) m_fetchThread.join();
+    }
+
     const char* GetName() const override { return "Ritual Helper"; }
 
     bool WantsOverlay() const override {
@@ -45,6 +55,7 @@ public:
         m_lastScan = Clock::now() - std::chrono::milliseconds(m_settings.scanIntervalMs);
         auto& events = const_cast<PluginSDK::EventsService&>(ctx()->Events);
         m_frameTok = events.OnFrame([this] { FrameTick(); });
+        StartFetch();
         ctx()->Log.Info("Ritual Helper plugin enabled");
     }
 
@@ -52,6 +63,8 @@ public:
         auto& events = const_cast<PluginSDK::EventsService&>(ctx()->Events);
         if (m_frameTok.Valid()) events.Unsubscribe(m_frameTok);
         m_frameTok = {};
+        m_fetchAbort = true;
+        if (m_fetchThread.joinable()) m_fetchThread.join();
         ctx()->Overlay.SetWantsOverlayInput(false);
         m_window.reset();
         m_uiHits.clear();
@@ -80,19 +93,21 @@ public:
 
         ImDrawList* dl = ImGui::GetForegroundDrawList();
 
-        if (m_settings.highlightItems) {
-            for (const auto& it : m_window->items) {
-                const ImVec2 a(it.rect.x + 1.f, it.rect.y + 1.f);
-                const ImVec2 b(it.rect.x + it.rect.w - 1.f, it.rect.y + it.rect.h - 1.f);
-                dl->AddRect(a, b, IM_COL32(80, 220, 255, 200), 0.f, 0, 2.f);
-            }
-        }
-
         const bool dryFlash = Clock::now() < m_dryFlashUntil;
         for (const auto& it : m_matches) {
             const ImVec2 a(it.rect.x + 3.f, it.rect.y + 3.f);
             const ImVec2 b(it.rect.x + it.rect.w - 3.f, it.rect.y + it.rect.h - 3.f);
             dl->AddRect(a, b, IM_COL32(255, 170, 40, 255), 0.f, 0, dryFlash ? 4.f : 2.5f);
+            if (it.valueEx > 0.0) {
+                char val[32];
+                FormatValue(val, sizeof(val), it.valueEx);
+                const ImVec2 ts = ImGui::CalcTextSize(val);
+                const ImVec2 tp(a.x + 2.f, a.y + 2.f);
+                dl->AddRectFilled(ImVec2(tp.x - 2.f, tp.y - 1.f),
+                                  ImVec2(tp.x + ts.x + 2.f, tp.y + ts.y + 1.f),
+                                  IM_COL32(0, 0, 0, 210), 2.f);
+                dl->AddText(tp, IM_COL32(255, 190, 70, 255), val);
+            }
         }
 
         DrawDeferButton();
@@ -170,7 +185,6 @@ public:
             "DEFER button appears next to the hourglass. It enters defer mode, "
             "clicks the matched items and applies - right-click cancels a run.");
 
-        ImGui::Checkbox("Outline ritual items", &m_settings.highlightItems);
         ImGui::SliderInt("Scan interval (ms)", &m_settings.scanIntervalMs,
                          RitualHelperConfig::kScanIntervalMinMs,
                          RitualHelperConfig::kScanIntervalMaxMs);
@@ -209,6 +223,34 @@ public:
         }
         if (m_settings.deferRules.empty())
             ImGui::TextDisabled("No rules yet. Example: add 'omen' or 'Deathrattle'.");
+
+        ImGui::SeparatorText("Value defer (poe2scout)");
+        ImGui::TextWrapped("Also defer any revealed item whose live poe2scout price "
+                           "(currency, omens, uniques) is at least this many exalted. "
+                           "0 = off.");
+        {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%d", m_settings.minValueExalted);
+            ImGui::SetNextItemWidth(110.f);
+            if (ImGui::InputText("Min value (exalted)", buf, sizeof(buf),
+                                 ImGuiInputTextFlags_CharsDecimal)) {
+                const int nv = buf[0] ? std::atoi(buf) : 0;
+                m_settings.minValueExalted =
+                    nv < 0 ? 0 : (nv > RitualHelperConfig::kMinValueMax
+                                      ? RitualHelperConfig::kMinValueMax : nv);
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lk(m_fetchMutex);
+            if (m_settings.minValueExalted > 0 && m_prices.divinePrice > 0.0) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("= %.2f divine",
+                                    m_settings.minValueExalted / m_prices.divinePrice);
+            }
+            ImGui::TextDisabled("Prices: %s", m_fetchStatus.c_str());
+        }
+        if (ImGui::Button(m_fetching ? "Refreshing..." : "Refresh prices") && !m_fetching)
+            StartFetch();
 
         ImGui::SeparatorText("Status");
         if (m_window) {
@@ -257,6 +299,46 @@ private:
     Clock::time_point m_dryFlashUntil{};
     std::string m_lastDumpPath;
     char m_ruleBuf[96] = {};
+
+    std::thread m_fetchThread;
+    std::atomic<bool> m_fetching{false};
+    std::atomic<bool> m_fetchAbort{false};
+    std::mutex m_fetchMutex;
+    RitualHelper::PriceResult m_prices;
+    std::string m_fetchStatus = "not fetched yet";
+
+    void StartFetch() {
+        if (m_fetching.exchange(true)) return;
+        if (m_fetchThread.joinable()) m_fetchThread.join();
+        m_fetchAbort = false;
+        {
+            std::lock_guard<std::mutex> lk(m_fetchMutex);
+            m_fetchStatus = "fetching...";
+        }
+        m_fetchThread = std::thread([this] {
+            RitualHelper::PriceResult r = RitualHelper::Poe2Scout::FetchAll(&m_fetchAbort);
+            {
+                std::lock_guard<std::mutex> lk(m_fetchMutex);
+                m_fetchStatus = r.status;
+                if (r.ok) m_prices = std::move(r);
+            }
+            m_fetching = false;
+        });
+    }
+
+    void FormatValue(char* out, size_t n, double valueEx) {
+        double divPrice = 0.0;
+        {
+            std::lock_guard<std::mutex> lk(m_fetchMutex);
+            divPrice = m_prices.divinePrice;
+        }
+        if (divPrice > 0.0 && valueEx >= divPrice * 0.95)
+            std::snprintf(out, n, "%.1f div", valueEx / divPrice);
+        else if (valueEx >= 10.0)
+            std::snprintf(out, n, "%.0f ex", valueEx);
+        else
+            std::snprintf(out, n, "%.2f ex", valueEx);
+    }
 
     void FrameTick() {
         if (!m_defer.IsRunning()) return;
@@ -314,7 +396,12 @@ private:
             m_uiHits = RitualHelper::FindRitualUiElements(all);
             m_bottom = RitualHelper::FindBottomButton(all, *m_window);
             m_toggle = RitualHelper::FindDeferToggle(all, *m_window);
-            m_matches = RitualHelper::MatchDeferItems(*m_window, m_settings.deferRules);
+            {
+                std::lock_guard<std::mutex> lk(m_fetchMutex);
+                m_matches = RitualHelper::MatchDeferItems(
+                    *m_window, m_settings.deferRules, m_prices.priceExalted,
+                    m_settings.minValueExalted);
+            }
         } else {
             m_uiHits.clear();
             m_matches.clear();

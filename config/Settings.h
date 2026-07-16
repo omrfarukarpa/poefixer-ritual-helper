@@ -13,15 +13,17 @@ namespace RitualHelperConfig {
 inline constexpr int kScanIntervalMinMs = 150;
 inline constexpr int kScanIntervalMaxMs = 2000;
 
+inline constexpr int kMinValueMax = 10000000;
+
 struct Settings {
     bool enabled = true;
     bool showOverlay = true;
-    bool highlightItems = true;
     bool debugMode = false;
     int  scanIntervalMs = 400;
 
     bool dryRun = true;
     std::vector<std::string> deferRules;
+    int  minValueExalted = 0;
 
     std::filesystem::path SettingsPath(const std::filesystem::path& dir) const {
         return dir / "config" / "settings.json";
@@ -38,11 +40,12 @@ struct Settings {
 
             enabled = j.value("enabled", enabled);
             showOverlay = j.value("show_overlay", showOverlay);
-            highlightItems = j.value("highlight_items", highlightItems);
             debugMode = j.value("debug_mode", debugMode);
             scanIntervalMs = std::clamp(j.value("scan_interval_ms", scanIntervalMs),
                                         kScanIntervalMinMs, kScanIntervalMaxMs);
             dryRun = j.value("dry_run", dryRun);
+            minValueExalted = std::clamp(j.value("min_value_exalted", minValueExalted),
+                                         0, kMinValueMax);
             if (j.contains("defer_rules") && j["defer_rules"].is_array()) {
                 deferRules.clear();
                 for (const auto& e : j["defer_rules"]) {
@@ -62,11 +65,11 @@ struct Settings {
             nlohmann::json j;
             j["enabled"] = enabled;
             j["show_overlay"] = showOverlay;
-            j["highlight_items"] = highlightItems;
             j["debug_mode"] = debugMode;
             j["scan_interval_ms"] = scanIntervalMs;
             j["dry_run"] = dryRun;
             j["defer_rules"] = deferRules;
+            j["min_value_exalted"] = minValueExalted;
             const std::string text = j.dump(2);
             std::ofstream out(SettingsPath(dir));
             if (out.is_open()) out << text;
