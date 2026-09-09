@@ -1,6 +1,6 @@
 # Ritual Helper
 
-**v1.0.0**
+**v1.1.0**
 
 A PoeFixer plugin for **Path of Exile 2** that automates **Ritual defers**: pick the
 items you care about from a live price catalog (or set a value threshold), and one click
@@ -20,9 +20,11 @@ Unofficial third-party game tool. Maintainer: Ömer Faruk ARPA.
 - **Value threshold** — optionally defer *any* revealed item worth at least X
   **Exalted or Divine** (live poe2scout prices, converted automatically). Catch the
   expensive surprise uniques without selecting them one by one.
+- **Season / league selection** — choose the current or an older softcore league from
+  the poe2scout list. The default **Auto (current league)** follows the live season.
 - **Live prices, auto-refreshed** — prices update in the background on a 15–60 minute
-  interval (default 30) plus a manual refresh button. Fetching runs off-thread; the
-  game never stalls.
+  interval (default 30) plus a manual refresh button. Changing the selected league
+  refreshes the catalog. Fetching runs off-thread; the game never stalls.
 - **Value labels** — matched items show their worth (`2.3 div` / `15 ex`) right on the
   ritual window.
 - **Safety first** — the click sequence verifies defer mode is actually active before

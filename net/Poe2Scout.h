@@ -22,14 +22,16 @@ struct PriceResult {
     double divinePrice = 0.0;
     std::unordered_map<std::string, double> priceExalted;
     std::vector<std::pair<std::string, std::vector<std::string>>> categories;
+    std::vector<std::string> leagues;
 };
 
 class Poe2Scout {
 public:
-    static PriceResult FetchAll(const std::atomic<bool>* abort = nullptr) {
+    static PriceResult FetchAll(const std::string& requestedLeague = {},
+                                const std::atomic<bool>* abort = nullptr) {
         PriceResult r;
         if (Aborted(abort)) return r;
-        DetectLeague(r, abort);
+        DetectLeague(r, requestedLeague, abort);
         if (r.league.empty()) r.league = "Runes of Aldur";
 
         static const char* kCurrencyCats[] = {
@@ -149,23 +151,45 @@ private:
         return ok;
     }
 
-    static void DetectLeague(PriceResult& r, const std::atomic<bool>* abort) {
+    static void DetectLeague(PriceResult& r, const std::string& requestedLeague,
+                             const std::atomic<bool>* abort) {
         std::string body;
         if (!Get("/api/poe2/Leagues", body, abort)) return;
         nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
         if (j.is_discarded() || !j.is_array()) return;
+        std::string current;
+        double currentDivinePrice = 0.0;
+        bool requestedFound = false;
         for (const auto& e : j) {
             if (!e.is_object()) continue;
-            if (!e.value("IsCurrent", false)) continue;
             const std::string shortName = e.value("ShortName", std::string());
             if (shortName.size() >= 2 && shortName.compare(shortName.size() - 2, 2, "hc") == 0)
                 continue;
             const std::string value = e.value("Value", std::string());
             if (value.rfind("HC ", 0) == 0) continue;
             if (value.empty()) continue;
-            r.league = value;
-            r.divinePrice = e.value("DivinePrice", 0.0);
-            return;
+            r.leagues.push_back(value);
+            if (e.value("IsCurrent", false) && current.empty()) {
+                current = value;
+                currentDivinePrice = e.value("DivinePrice", 0.0);
+                if (requestedLeague.empty()) r.divinePrice = currentDivinePrice;
+            }
+            if (!requestedLeague.empty() && value == requestedLeague) {
+                requestedFound = true;
+                r.divinePrice = e.value("DivinePrice", 0.0);
+            }
+        }
+        if (!requestedLeague.empty() && requestedFound) r.league = requestedLeague;
+        else {
+            r.league = current;
+            r.divinePrice = currentDivinePrice;
+        }
+        if (r.league == requestedLeague && r.divinePrice <= 0.0) {
+            for (const auto& e : j) {
+                if (!e.is_object() || e.value("Value", std::string()) != r.league) continue;
+                r.divinePrice = e.value("DivinePrice", 0.0);
+                break;
+            }
         }
     }
 

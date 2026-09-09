@@ -26,6 +26,7 @@ struct Settings {
     int  scanIntervalMs = 400;
 
     bool dryRun = false;
+    std::string league;
     std::vector<std::string> selectedItems;
     int  minValue = 0;
     int  minValueUnit = kValueUnitExalted;
@@ -62,6 +63,8 @@ struct Settings {
             scanIntervalMs = std::clamp(j.value("scan_interval_ms", scanIntervalMs),
                                         kScanIntervalMinMs, kScanIntervalMaxMs);
             dryRun = j.value("dry_run", dryRun);
+            league = j.value("league", league);
+            if (league.size() > 96) league.clear();
             minValue = std::clamp(j.value("min_value", j.value("min_value_exalted", 0)),
                                   0, kMinValueMax);
             minValueUnit = std::clamp(j.value("min_value_unit", minValueUnit),
@@ -82,6 +85,7 @@ struct Settings {
             j["debug_mode"] = debugMode;
             j["scan_interval_ms"] = scanIntervalMs;
             j["dry_run"] = dryRun;
+            j["league"] = league;
             j["selected_items"] = selectedItems;
             j["min_value"] = minValue;
             j["min_value_unit"] = minValueUnit;

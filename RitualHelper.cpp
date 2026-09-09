@@ -23,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "1.0.0";
+inline constexpr const char* kRitualHelperVersion    = "1.1.0";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -190,6 +190,8 @@ public:
                          RitualHelperConfig::kScanIntervalMinMs,
                          RitualHelperConfig::kScanIntervalMaxMs);
 
+        DrawLeaguePicker();
+
         DrawItemPicker();
 
         ImGui::SeparatorText("Value defer (poe2scout)");
@@ -317,6 +319,43 @@ public:
         ImGui::EndChild();
     }
 
+    void DrawLeaguePicker() {
+        std::lock_guard<std::mutex> lk(m_fetchMutex);
+        ImGui::SeparatorText("Price league");
+
+        std::vector<const char*> labels;
+        labels.reserve(m_prices.leagues.size() + 1);
+        labels.push_back("Auto (current league)");
+        for (const auto& name : m_prices.leagues) labels.push_back(name.c_str());
+
+        int selected = 0;
+        if (!m_settings.league.empty()) {
+            for (size_t i = 0; i < m_prices.leagues.size(); ++i) {
+                if (m_prices.leagues[i] == m_settings.league) {
+                    selected = static_cast<int>(i + 1);
+                    break;
+                }
+            }
+        }
+        ImGui::SetNextItemWidth(280.f);
+        if (labels.size() == 1) {
+            ImGui::TextDisabled("League list loads from poe2scout - %s", m_fetchStatus.c_str());
+            return;
+        }
+        if (ImGui::Combo("Season / league", &selected, labels.data(),
+                         static_cast<int>(labels.size()))) {
+            const std::string next = selected > 0
+                ? m_prices.leagues[static_cast<size_t>(selected - 1)] : std::string();
+            if (next != m_settings.league) {
+                m_settings.league = next;
+                m_fetchAgain = true;
+                m_fetchAbort = true;
+            }
+        }
+        ImGui::TextDisabled("Selected: %s", m_prices.league.empty()
+                            ? "auto" : m_prices.league.c_str());
+    }
+
 
 private:
     Settings m_settings;
@@ -339,6 +378,7 @@ private:
     std::thread m_fetchThread;
     std::atomic<bool> m_fetching{false};
     std::atomic<bool> m_fetchAbort{false};
+    std::atomic<bool> m_fetchAgain{false};
     std::mutex m_fetchMutex;
     RitualHelper::PriceResult m_prices;
     std::string m_fetchStatus = "not fetched yet";
@@ -355,11 +395,20 @@ private:
             m_fetchStatus = "fetching...";
         }
         m_fetchThread = std::thread([this] {
-            RitualHelper::PriceResult r = RitualHelper::Poe2Scout::FetchAll(&m_fetchAbort);
+            std::string league;
+            {
+                std::lock_guard<std::mutex> lk(m_fetchMutex);
+                league = m_settings.league;
+            }
+            RitualHelper::PriceResult r = RitualHelper::Poe2Scout::FetchAll(league, &m_fetchAbort);
             {
                 std::lock_guard<std::mutex> lk(m_fetchMutex);
                 m_fetchStatus = r.status;
-                if (r.ok) m_prices = std::move(r);
+                if (r.ok) {
+                    if (!league.empty() && r.league != league)
+                        m_settings.league = r.league;
+                    m_prices = std::move(r);
+                }
             }
             m_fetching = false;
         });
@@ -381,7 +430,7 @@ private:
     }
 
     void FrameTick() {
-        if (!m_fetching && Clock::now() > m_nextAutoFetch)
+        if (!m_fetching && (m_fetchAgain.exchange(false) || Clock::now() > m_nextAutoFetch))
             StartFetch();
         if (!m_defer.IsRunning()) return;
         const auto now = Clock::now();
