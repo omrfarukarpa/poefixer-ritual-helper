@@ -1,6 +1,6 @@
 # Ritual Helper
 
-**v1.1.1**
+**v1.3.0**
 
 A PoeFixer plugin for **Path of Exile 2** that automates **Ritual defers**: pick the
 items you care about from a live price catalog (or set a value threshold), and one click
@@ -17,6 +17,10 @@ Unofficial third-party game tool. Maintainer: Ömer Faruk ARPA.
 - **Pick items from a catalog** — a searchable checkbox list of every priced item from
   poe2scout: currency, omens, essences, fragments and **all uniques** (weapons, armour,
   accessories, jewels, flasks), each shown with its current price.
+- Catalog entries are sorted from highest to lowest price within each category, with
+  unpriced entries at the bottom.
+- Incomplete or canceled price refreshes are ignored so a temporary poe2scout response
+  cannot clear an existing catalog.
 - **Value threshold** — optionally defer *any* revealed item worth at least X
   **Exalted or Divine** (live poe2scout prices, converted automatically). Catch the
   expensive surprise uniques without selecting them one by one.

@@ -23,6 +23,8 @@ struct PriceResult {
     std::unordered_map<std::string, double> priceExalted;
     std::vector<std::pair<std::string, std::vector<std::string>>> categories;
     std::vector<std::string> leagues;
+    size_t uniqueItems = 0;
+    bool uniqueComplete = false;
 };
 
 class Poe2Scout {
@@ -53,24 +55,46 @@ public:
             "weapon", "armour", "accessory", "jewel", "flask", "sanctum",
         };
         int uniqueCount = 0;
+        bool uniqueComplete = true;
         for (const char* cat : kUniqueCats) {
             if (Aborted(abort)) break;
             const std::string label = std::string("unique ") + cat;
+            bool categoryComplete = false;
             for (int page = 1; page <= 4; ++page) {
                 std::string body;
                 const std::string path = "/api/poe2/Leagues/" + Encode(r.league) +
                                          "/Uniques/ByCategory?Category=" + std::string(cat) +
                                          "&PerPage=250&Page=" + std::to_string(page);
-                if (!Get(path, body, abort)) break;
+                if (!Get(path, body, abort)) { uniqueComplete = false; break; }
                 int pages = 0;
-                if (!ParseItems(body, "Name", label.c_str(), r, &pages)) break;
+                if (!ParseItems(body, "Name", label.c_str(), r, &pages)) {
+                    uniqueComplete = false;
+                    break;
+                }
                 ++uniqueCount;
-                if (page >= pages) break;
+                if (page >= pages) {
+                    categoryComplete = !r.categories.back().second.empty();
+                    break;
+                }
             }
+            if (!categoryComplete) uniqueComplete = false;
         }
 
-        for (auto& c : r.categories)
-            std::sort(c.second.begin(), c.second.end());
+        for (const auto& c : r.categories)
+            if (c.first.rfind("unique ", 0) == 0) r.uniqueItems += c.second.size();
+        r.uniqueComplete = uniqueComplete && r.uniqueItems > 0 && !Aborted(abort);
+
+        for (auto& c : r.categories) {
+            std::sort(c.second.begin(), c.second.end(), [&r](const std::string& a,
+                                                              const std::string& b) {
+                const auto ia = r.priceExalted.find(a);
+                const auto ib = r.priceExalted.find(b);
+                const double pa = ia != r.priceExalted.end() ? ia->second : 0.0;
+                const double pb = ib != r.priceExalted.end() ? ib->second : 0.0;
+                if (pa != pb) return pa > pb;
+                return a < b;
+            });
+        }
 
         r.ok = okCount > 0;
         if (!r.ok) {
@@ -129,26 +153,30 @@ private:
                     WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                                        WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
                     WinHttpReceiveResponse(hRequest, nullptr) && !Aborted(abort)) {
-                    DWORD avail = 0;
-                    do {
-                        if (Aborted(abort)) break;
-                        avail = 0;
+                    DWORD status = 0;
+                    DWORD statusSize = sizeof(status);
+                    const bool httpOk = WinHttpQueryHeaders(hRequest,
+                        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize,
+                        WINHTTP_NO_HEADER_INDEX) && status == 200;
+                    while (httpOk && !Aborted(abort)) {
+                        DWORD avail = 0;
                         if (!WinHttpQueryDataAvailable(hRequest, &avail)) break;
-                        if (avail == 0) break;
+                        if (avail == 0) { ok = !out.empty(); break; }
                         std::string chunk(avail, '\0');
                         DWORD read = 0;
                         if (!WinHttpReadData(hRequest, chunk.data(), avail, &read)) break;
+                        if (read == 0) break;
                         chunk.resize(read);
                         out += chunk;
-                    } while (avail > 0);
-                    ok = !out.empty();
+                    }
                 }
                 WinHttpCloseHandle(hRequest);
             }
             WinHttpCloseHandle(hConnect);
         }
         WinHttpCloseHandle(hSession);
-        return ok;
+        return ok && !Aborted(abort);
     }
 
     static void DetectLeague(PriceResult& r, const std::string& requestedLeague,
@@ -160,6 +188,7 @@ private:
         std::string current;
         double currentDivinePrice = 0.0;
         bool requestedFound = false;
+        std::vector<std::pair<std::string, double>> currentCandidates;
         for (const auto& e : j) {
             if (!e.is_object()) continue;
             const std::string shortName = e.value("ShortName", std::string());
@@ -174,15 +203,29 @@ private:
                 currentDivinePrice = e.value("DivinePrice", 0.0);
                 if (requestedLeague.empty()) r.divinePrice = currentDivinePrice;
             }
+            if (e.value("IsCurrent", false))
+                currentCandidates.emplace_back(value, e.value("DivinePrice", 0.0));
             if (!requestedLeague.empty() && value == requestedLeague) {
                 requestedFound = true;
                 r.divinePrice = e.value("DivinePrice", 0.0);
             }
         }
-        if (!requestedLeague.empty() && requestedFound) r.league = requestedLeague;
-        else {
+        const int requestedUniqueCount = requestedFound
+            ? HasUniqueData(requestedLeague, abort) : 0;
+        if (!requestedLeague.empty() && requestedFound && requestedUniqueCount > 0) {
+            r.league = requestedLeague;
+        } else {
             r.league = current;
             r.divinePrice = currentDivinePrice;
+            int bestUniqueCount = 0;
+            for (const auto& candidate : currentCandidates) {
+                const int uniqueCount = HasUniqueData(candidate.first, abort);
+                if (uniqueCount > bestUniqueCount) {
+                    bestUniqueCount = uniqueCount;
+                    r.league = candidate.first;
+                    r.divinePrice = candidate.second;
+                }
+            }
         }
         if (r.league == requestedLeague && r.divinePrice <= 0.0) {
             for (const auto& e : j) {
@@ -191,6 +234,17 @@ private:
                 break;
             }
         }
+    }
+
+    static int HasUniqueData(const std::string& league,
+                             const std::atomic<bool>* abort) {
+        std::string body;
+        const std::string path = "/api/poe2/Leagues/" + Encode(league)
+                               + "/Uniques/ByCategory?Category=accessory&PerPage=1&Page=1";
+        if (!Get(path, body, abort)) return -1;
+        nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
+        if (j.is_discarded() || !j.is_object()) return -1;
+        return j.value("Total", 0);
     }
 
     static bool ParseItems(const std::string& body, const char* nameKey, const char* category,

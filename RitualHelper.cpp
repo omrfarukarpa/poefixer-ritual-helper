@@ -23,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "1.1.1";
+inline constexpr const char* kRitualHelperVersion    = "1.3.0";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -415,14 +415,23 @@ private:
                 std::lock_guard<std::mutex> lk(m_fetchMutex);
                 league = m_settings.league;
             }
-            RitualHelper::PriceResult r = RitualHelper::Poe2Scout::FetchAll(league, &m_fetchAbort);
+            RitualHelper::PriceResult r;
+            try {
+                r = RitualHelper::Poe2Scout::FetchAll(league, &m_fetchAbort);
+            } catch (...) {
+                r.status = "Price refresh failed";
+            }
             {
                 std::lock_guard<std::mutex> lk(m_fetchMutex);
                 m_fetchStatus = r.status;
-                if (r.ok) {
-                    if (!league.empty() && r.league != league)
-                        m_settings.league = r.league;
+                if (r.ok && r.uniqueComplete && !m_fetchAbort.load()) {
                     m_prices = std::move(r);
+                } else if (m_fetchAbort.load()) {
+                    m_fetchStatus = "refresh canceled";
+                } else {
+                    m_fetchStatus = m_prices.categories.empty()
+                        ? "Incomplete price data; retry with Refresh now"
+                        : "Incomplete price data; keeping previous catalog";
                 }
             }
             m_fetching = false;
