@@ -16,9 +16,8 @@ inline constexpr int kScanIntervalMaxMs = 2000;
 inline constexpr int kMinValueMax = 10000000;
 inline constexpr int kValueUnitExalted = 0;
 inline constexpr int kValueUnitDivine = 1;
-inline constexpr int kPriceDisplayAuto = 0;
-inline constexpr int kPriceDisplayExalted = 1;
-inline constexpr int kPriceDisplayDivine = 2;
+inline constexpr int kPriceDisplayExalted = 0;
+inline constexpr int kPriceDisplayDivine = 1;
 inline constexpr int kRefreshMinMinutes = 15;
 inline constexpr int kRefreshMaxMinutes = 60;
 
@@ -33,7 +32,7 @@ struct Settings {
     std::vector<std::string> selectedItems;
     int  minValue = 0;
     int  minValueUnit = kValueUnitExalted;
-    int  priceDisplayUnit = kPriceDisplayAuto;
+    int  priceDisplayUnit = kPriceDisplayExalted;
     int  priceRefreshMinutes = 30;
 
     std::filesystem::path SettingsPath(const std::filesystem::path& dir) const {
@@ -74,7 +73,7 @@ struct Settings {
             minValueUnit = std::clamp(j.value("min_value_unit", minValueUnit),
                                       kValueUnitExalted, kValueUnitDivine);
             priceDisplayUnit = std::clamp(j.value("price_display_unit", priceDisplayUnit),
-                                          kPriceDisplayAuto, kPriceDisplayDivine);
+                                          kPriceDisplayExalted, kPriceDisplayDivine);
             priceRefreshMinutes = std::clamp(j.value("price_refresh_minutes", priceRefreshMinutes),
                                              kRefreshMinMinutes, kRefreshMaxMinutes);
             LoadStringVec(j, "selected_items", selectedItems);

@@ -227,8 +227,8 @@ public:
         ImGui::SetNextItemWidth(100.f);
         ImGui::Combo("##valunit", &m_settings.minValueUnit, kUnits, 2);
         ImGui::SetNextItemWidth(120.f);
-        static const char* kPriceUnits[] = {"Auto", "Exalted", "Divine"};
-        ImGui::Combo("Price display", &m_settings.priceDisplayUnit, kPriceUnits, 3);
+        static const char* kPriceUnits[] = {"Exalted", "Divine"};
+        ImGui::Combo("Price display", &m_settings.priceDisplayUnit, kPriceUnits, 2);
         {
             std::lock_guard<std::mutex> lk(m_fetchMutex);
             if (m_settings.minValue > 0 && m_prices.divinePrice > 0.0) {
@@ -449,14 +449,8 @@ private:
         if (m_settings.priceDisplayUnit == RitualHelperConfig::kPriceDisplayDivine
             && divPrice > 0.0)
             std::snprintf(out, n, "%.1f div", valueEx / divPrice);
-        else if (m_settings.priceDisplayUnit == RitualHelperConfig::kPriceDisplayExalted)
-            std::snprintf(out, n, valueEx >= 10.0 ? "%.0f ex" : "%.2f ex", valueEx);
-        else if (divPrice > 0.0 && valueEx >= divPrice * 0.95)
-            std::snprintf(out, n, "%.1f div", valueEx / divPrice);
-        else if (valueEx >= 10.0)
-            std::snprintf(out, n, "%.0f ex", valueEx);
         else
-            std::snprintf(out, n, "%.2f ex", valueEx);
+            std::snprintf(out, n, valueEx >= 10.0 ? "%.0f ex" : "%.2f ex", valueEx);
     }
 
     void FormatValue(char* out, size_t n, double valueEx) {
