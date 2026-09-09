@@ -23,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "1.1.0";
+inline constexpr const char* kRitualHelperVersion    = "1.1.1";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -78,16 +78,25 @@ public:
     }
 
     void DrawUI() override {
-        if (!m_settings.enabled || !m_settings.showOverlay) return;
-        if (!ctx()->Game.IsInGame()) return;
+        if (!m_settings.enabled || !m_settings.showOverlay) {
+            ResetOverlayCapture();
+            return;
+        }
+        if (!ctx()->Game.IsInGame()) {
+            ResetOverlayCapture();
+            return;
+        }
         if (ctx()->ImGuiContext)
             ImGui::SetCurrentContext(static_cast<ImGuiContext*>(ctx()->ImGuiContext));
-        if (!ctx()->Game.IsForeground()) return;
+        if (!ctx()->Game.IsForeground()) {
+            ResetOverlayCapture();
+            return;
+        }
 
         const ImVec2 disp = ImGui::GetIO().DisplaySize;
         RefreshIfNeeded(disp.x, disp.y);
         if (!m_window) {
-            ctx()->Overlay.SetWantsOverlayInput(false);
+            ResetOverlayCapture();
             m_hwClick.Reset();
             return;
         }
@@ -137,12 +146,12 @@ public:
 
     void DrawDeferButton() {
         if (m_defer.IsRunning()) {
-            ctx()->Overlay.SetWantsOverlayInput(false);
+            ResetOverlayCapture();
             m_hwClick.Reset();
             return;
         }
         if (m_matches.empty() || (!m_toggle && m_bottom.mode == RitualHelper::BottomButtonMode::None)) {
-            ctx()->Overlay.SetWantsOverlayInput(false);
+            ResetOverlayCapture();
             m_hwClick.Reset();
             return;
         }
@@ -164,11 +173,15 @@ public:
         const ImVec2 p1(pos.x + RitualHelperOverlay::kButtonW,
                         pos.y + RitualHelperOverlay::kButtonH);
         const bool over = RitualHelperOverlay::HitRect(ImGui::GetIO().MousePos, pos, p1);
-        ctx()->Overlay.SetWantsOverlayInput(over);
+        m_overlayCapturePending = over;
+        ctx()->Overlay.SetWantsOverlayInput(over || m_overlayCaptureApplied);
 
         const auto r = RitualHelperOverlay::DrawOverlayButton(pos, label, "##ritual_defer");
         const bool hw = m_hwClick.Update(true, r.btnP0, r.btnP1);
-        if (r.clicked || hw) StartDefer();
+        if (r.clicked || hw) {
+            ResetOverlayCapture();
+            StartDefer();
+        }
     }
 
     void DrawSettings() override {
@@ -379,6 +392,8 @@ private:
     std::atomic<bool> m_fetching{false};
     std::atomic<bool> m_fetchAbort{false};
     std::atomic<bool> m_fetchAgain{false};
+    bool m_overlayCapturePending = false;
+    bool m_overlayCaptureApplied = false;
     std::mutex m_fetchMutex;
     RitualHelper::PriceResult m_prices;
     std::string m_fetchStatus = "not fetched yet";
@@ -432,6 +447,13 @@ private:
     void FrameTick() {
         if (!m_fetching && (m_fetchAgain.exchange(false) || Clock::now() > m_nextAutoFetch))
             StartFetch();
+        if (!m_settings.enabled || !m_settings.showOverlay || !ctx()->Game.IsInGame()
+            || !ctx()->Game.IsForeground()) {
+            ResetOverlayCapture();
+        } else {
+            m_overlayCaptureApplied = m_overlayCapturePending;
+            ctx()->Overlay.SetWantsOverlayInput(m_overlayCaptureApplied);
+        }
         if (!m_defer.IsRunning()) return;
         const auto now = Clock::now();
         if (m_window && now - m_lastBottomPoll > std::chrono::milliseconds(100)) {
@@ -440,6 +462,12 @@ private:
             m_bottom = RitualHelper::FindBottomButton(texts, *m_window);
         }
         m_defer.Tick(m_bottom, ctx()->Game.IsForeground());
+    }
+
+    void ResetOverlayCapture() {
+        m_overlayCapturePending = false;
+        m_overlayCaptureApplied = false;
+        ctx()->Overlay.SetWantsOverlayInput(false);
     }
 
     void StartDefer() {
