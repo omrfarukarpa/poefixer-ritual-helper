@@ -90,6 +90,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="config\Settings.h" />
+    <ClInclude Include="config\UniqueCatalog.h" />
     <ClInclude Include="game\DeferPlanner.h" />
     <ClInclude Include="game\DeferState.h" />
     <ClInclude Include="input\Win32Input.h" />

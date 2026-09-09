@@ -23,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "1.3.0";
+inline constexpr const char* kRitualHelperVersion    = "1.4.0";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -424,7 +424,7 @@ private:
             {
                 std::lock_guard<std::mutex> lk(m_fetchMutex);
                 m_fetchStatus = r.status;
-                if (r.ok && r.uniqueComplete && !m_fetchAbort.load()) {
+                if (r.ok && !m_fetchAbort.load()) {
                     m_prices = std::move(r);
                 } else if (m_fetchAbort.load()) {
                     m_fetchStatus = "refresh canceled";

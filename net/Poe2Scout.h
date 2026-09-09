@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../third_party/json.hpp"
+#include "../config/UniqueCatalog.h"
 
 #include <algorithm>
 #include <atomic>
@@ -35,6 +36,7 @@ public:
         if (Aborted(abort)) return r;
         DetectLeague(r, requestedLeague, abort);
         if (r.league.empty()) r.league = "Runes of Aldur";
+        SeedUniqueCatalog(r);
 
         static const char* kCurrencyCats[] = {
             "currency", "essences", "runes", "ultimatum", "expedition", "ritual", "vaultkeys",
@@ -188,7 +190,6 @@ private:
         std::string current;
         double currentDivinePrice = 0.0;
         bool requestedFound = false;
-        std::vector<std::pair<std::string, double>> currentCandidates;
         for (const auto& e : j) {
             if (!e.is_object()) continue;
             const std::string shortName = e.value("ShortName", std::string());
@@ -203,29 +204,16 @@ private:
                 currentDivinePrice = e.value("DivinePrice", 0.0);
                 if (requestedLeague.empty()) r.divinePrice = currentDivinePrice;
             }
-            if (e.value("IsCurrent", false))
-                currentCandidates.emplace_back(value, e.value("DivinePrice", 0.0));
             if (!requestedLeague.empty() && value == requestedLeague) {
                 requestedFound = true;
                 r.divinePrice = e.value("DivinePrice", 0.0);
             }
         }
-        const int requestedUniqueCount = requestedFound
-            ? HasUniqueData(requestedLeague, abort) : 0;
-        if (!requestedLeague.empty() && requestedFound && requestedUniqueCount > 0) {
+        if (!requestedLeague.empty() && requestedFound) {
             r.league = requestedLeague;
         } else {
             r.league = current;
             r.divinePrice = currentDivinePrice;
-            int bestUniqueCount = 0;
-            for (const auto& candidate : currentCandidates) {
-                const int uniqueCount = HasUniqueData(candidate.first, abort);
-                if (uniqueCount > bestUniqueCount) {
-                    bestUniqueCount = uniqueCount;
-                    r.league = candidate.first;
-                    r.divinePrice = candidate.second;
-                }
-            }
         }
         if (r.league == requestedLeague && r.divinePrice <= 0.0) {
             for (const auto& e : j) {
@@ -236,15 +224,17 @@ private:
         }
     }
 
-    static int HasUniqueData(const std::string& league,
-                             const std::atomic<bool>* abort) {
-        std::string body;
-        const std::string path = "/api/poe2/Leagues/" + Encode(league)
-                               + "/Uniques/ByCategory?Category=accessory&PerPage=1&Page=1";
-        if (!Get(path, body, abort)) return -1;
-        nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
-        if (j.is_discarded() || !j.is_object()) return -1;
-        return j.value("Total", 0);
+    static void SeedUniqueCatalog(PriceResult& r) {
+        for (size_t i = 0; i < kUniqueCatalogCount; ++i) {
+            const auto& entry = kUniqueCatalog[i];
+            auto it = std::find_if(r.categories.begin(), r.categories.end(),
+                                   [&](const auto& c) { return c.first == entry.category; });
+            if (it == r.categories.end()) {
+                r.categories.emplace_back(entry.category, std::vector<std::string>{entry.name});
+            } else if (std::find(it->second.begin(), it->second.end(), entry.name) == it->second.end()) {
+                it->second.push_back(entry.name);
+            }
+        }
     }
 
     static bool ParseItems(const std::string& body, const char* nameKey, const char* category,
@@ -267,7 +257,8 @@ private:
             if (!it.is_object()) continue;
             const std::string name = it.value(nameKey, std::string());
             if (name.empty()) continue;
-            names->push_back(name);
+            if (std::find(names->begin(), names->end(), name) == names->end())
+                names->push_back(name);
             if (it.contains("CurrentPrice") && it["CurrentPrice"].is_number())
                 r.priceExalted[name] = it["CurrentPrice"].get<double>();
         }
