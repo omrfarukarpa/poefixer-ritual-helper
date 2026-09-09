@@ -23,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "1.4.0";
+inline constexpr const char* kRitualHelperVersion    = "1.5.0";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -226,6 +226,9 @@ public:
         static const char* kUnits[] = {"Exalted", "Divine"};
         ImGui::SetNextItemWidth(100.f);
         ImGui::Combo("##valunit", &m_settings.minValueUnit, kUnits, 2);
+        ImGui::SetNextItemWidth(120.f);
+        static const char* kPriceUnits[] = {"Auto", "Exalted", "Divine"};
+        ImGui::Combo("Price display", &m_settings.priceDisplayUnit, kPriceUnits, 3);
         {
             std::lock_guard<std::mutex> lk(m_fetchMutex);
             if (m_settings.minValue > 0 && m_prices.divinePrice > 0.0) {
@@ -325,6 +328,9 @@ public:
                     char val[32];
                     FormatValueLocked(val, sizeof(val), pIt->second);
                     ImGui::TextDisabled("(%s)", val);
+                } else {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(no price)");
                 }
                 ImGui::PopID();
             }
@@ -440,7 +446,12 @@ private:
 
     void FormatValueLocked(char* out, size_t n, double valueEx) {
         const double divPrice = m_prices.divinePrice;
-        if (divPrice > 0.0 && valueEx >= divPrice * 0.95)
+        if (m_settings.priceDisplayUnit == RitualHelperConfig::kPriceDisplayDivine
+            && divPrice > 0.0)
+            std::snprintf(out, n, "%.1f div", valueEx / divPrice);
+        else if (m_settings.priceDisplayUnit == RitualHelperConfig::kPriceDisplayExalted)
+            std::snprintf(out, n, valueEx >= 10.0 ? "%.0f ex" : "%.2f ex", valueEx);
+        else if (divPrice > 0.0 && valueEx >= divPrice * 0.95)
             std::snprintf(out, n, "%.1f div", valueEx / divPrice);
         else if (valueEx >= 10.0)
             std::snprintf(out, n, "%.0f ex", valueEx);
