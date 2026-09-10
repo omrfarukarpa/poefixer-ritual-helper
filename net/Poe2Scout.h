@@ -4,11 +4,12 @@
 #include "../config/UniqueCatalog.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include <Windows.h>
@@ -16,16 +17,115 @@
 
 namespace RitualHelper {
 
+enum class Category : int {
+    Currency = 0,
+    Essence,
+    Rune,
+    SoulCore,
+    Catalyst,
+    Delirium,
+    Incursion,
+    Idol,
+    Ritual,
+    VaultKey,
+    Fragment,
+    Abyss,
+    UncutGem,
+    LineageGem,
+    Verisium,
+    Vaal,
+    Expedition,
+    UniqueWeapon,
+    UniqueArmour,
+    UniqueAccessory,
+    UniqueJewel,
+    UniqueFlask,
+    UniqueSanctum,
+    Count
+};
+
+inline constexpr int kCategoryCount = static_cast<int>(Category::Count);
+
+inline const char* CategoryName(Category c) {
+    switch (c) {
+        case Category::Currency:        return "Currency";
+        case Category::Essence:         return "Essences";
+        case Category::Rune:            return "Runes";
+        case Category::SoulCore:        return "Soul Cores (Ultimatum)";
+        case Category::Catalyst:        return "Catalysts (Breach)";
+        case Category::Delirium:        return "Delirium (Liquid)";
+        case Category::Incursion:       return "Incursion";
+        case Category::Idol:            return "Idols";
+        case Category::Ritual:          return "Ritual (Omens)";
+        case Category::VaultKey:        return "Vault Keys";
+        case Category::Fragment:        return "Fragments";
+        case Category::Abyss:           return "Abyss";
+        case Category::UncutGem:        return "Uncut Gems";
+        case Category::LineageGem:      return "Lineage Gems";
+        case Category::Verisium:        return "Verisium / Alloys";
+        case Category::Vaal:            return "Vaal";
+        case Category::Expedition:      return "Expedition";
+        case Category::UniqueWeapon:    return "Unique Weapons";
+        case Category::UniqueArmour:    return "Unique Armour";
+        case Category::UniqueAccessory: return "Unique Accessories";
+        case Category::UniqueJewel:     return "Unique Jewels";
+        case Category::UniqueFlask:     return "Unique Flasks";
+        case Category::UniqueSanctum:   return "Unique Sanctum";
+        default:                        return "?";
+    }
+}
+
+inline Category CatFromApiId(const std::string& a) {
+    if (a == "currency")           return Category::Currency;
+    if (a == "essences")           return Category::Essence;
+    if (a == "runes")              return Category::Rune;
+    if (a == "ultimatum")          return Category::SoulCore;
+    if (a == "expedition")         return Category::Expedition;
+    if (a == "ritual")             return Category::Ritual;
+    if (a == "vaultkeys")          return Category::VaultKey;
+    if (a == "breach")             return Category::Catalyst;
+    if (a == "abyss")              return Category::Abyss;
+    if (a == "uncutgems")          return Category::UncutGem;
+    if (a == "lineagesupportgems") return Category::LineageGem;
+    if (a == "delirium")           return Category::Delirium;
+    if (a == "incursion")          return Category::Incursion;
+    if (a == "idol")               return Category::Idol;
+    if (a == "verisium")           return Category::Verisium;
+    if (a == "vaal")               return Category::Vaal;
+    if (a == "fragments")          return Category::Fragment;
+    return Category::Count;
+}
+
+inline Category CatFromUniqueApiId(const std::string& a) {
+    if (a == "weapon" || a == "unique weapon")       return Category::UniqueWeapon;
+    if (a == "armour" || a == "unique armour")       return Category::UniqueArmour;
+    if (a == "accessory" || a == "unique accessory") return Category::UniqueAccessory;
+    if (a == "jewel" || a == "unique jewel")         return Category::UniqueJewel;
+    if (a == "flask" || a == "unique flask")         return Category::UniqueFlask;
+    if (a == "sanctum" || a == "unique sanctum")     return Category::UniqueSanctum;
+    return Category::Count;
+}
+
 struct PriceResult {
     bool ok = false;
     std::string status;
     std::string league;
     double divinePrice = 0.0;
+    double relExalted = 1.0;
+    double relChaos = 0.0;
+    double relDivine = 0.0;
     std::unordered_map<std::string, double> priceExalted;
-    std::vector<std::pair<std::string, std::vector<std::string>>> categories;
+    std::array<std::vector<std::string>, kCategoryCount> categories;
     std::vector<std::string> leagues;
     size_t uniqueItems = 0;
     bool uniqueComplete = false;
+
+    bool HasCategories() const {
+        for (const auto& c : categories) {
+            if (!c.empty()) return true;
+        }
+        return false;
+    }
 };
 
 class Poe2Scout {
@@ -36,6 +136,14 @@ public:
         if (Aborted(abort)) return r;
         DetectLeague(r, requestedLeague, abort);
         if (r.league.empty()) r.league = "Runes of Aldur";
+
+        std::string refBody;
+        if (Get("/api/poe2/Leagues/" + Encode(r.league) + "/ReferenceCurrencies", refBody, abort))
+            ParseReference(refBody, r);
+
+        if (r.relDivine > 0.0)
+            r.divinePrice = r.relDivine;
+
         SeedUniqueCatalog(r);
 
         static const char* kCurrencyCats[] = {
@@ -44,12 +152,13 @@ public:
             "verisium", "vaal", "fragments",
         };
         int okCount = 0;
-        for (const char* cat : kCurrencyCats) {
+        for (const char* catStr : kCurrencyCats) {
             if (Aborted(abort)) break;
             std::string body;
             const std::string path = "/api/poe2/Leagues/" + Encode(r.league) +
-                                     "/Currencies/ByCategory?Category=" + cat +
+                                     "/Currencies/ByCategory?Category=" + catStr +
                                      "&PerPage=250&Page=1";
+            const Category cat = CatFromApiId(catStr);
             if (Get(path, body, abort) && ParseItems(body, "Text", cat, r)) ++okCount;
         }
 
@@ -58,36 +167,38 @@ public:
         };
         int uniqueCount = 0;
         bool uniqueComplete = true;
-        for (const char* cat : kUniqueCats) {
+        for (const char* catStr : kUniqueCats) {
             if (Aborted(abort)) break;
-            const std::string label = std::string("unique ") + cat;
+            const Category cat = CatFromUniqueApiId(catStr);
             bool categoryComplete = false;
             for (int page = 1; page <= 4; ++page) {
                 std::string body;
                 const std::string path = "/api/poe2/Leagues/" + Encode(r.league) +
-                                         "/Uniques/ByCategory?Category=" + std::string(cat) +
+                                         "/Uniques/ByCategory?Category=" + std::string(catStr) +
                                          "&PerPage=250&Page=" + std::to_string(page);
                 if (!Get(path, body, abort)) { uniqueComplete = false; break; }
                 int pages = 0;
-                if (!ParseItems(body, "Name", label.c_str(), r, &pages)) {
+                if (!ParseItems(body, "Name", cat, r, &pages)) {
                     uniqueComplete = false;
                     break;
                 }
                 ++uniqueCount;
                 if (page >= pages) {
-                    categoryComplete = !r.categories.back().second.empty();
+                    if (cat != Category::Count)
+                        categoryComplete = !r.categories[static_cast<size_t>(cat)].empty();
                     break;
                 }
             }
             if (!categoryComplete) uniqueComplete = false;
         }
 
-        for (const auto& c : r.categories)
-            if (c.first.rfind("unique ", 0) == 0) r.uniqueItems += c.second.size();
+        for (int i = static_cast<int>(Category::UniqueWeapon); i <= static_cast<int>(Category::UniqueSanctum); ++i) {
+            r.uniqueItems += r.categories[i].size();
+        }
         r.uniqueComplete = uniqueComplete && r.uniqueItems > 0 && !Aborted(abort);
 
-        for (auto& c : r.categories) {
-            std::sort(c.second.begin(), c.second.end(), [&r](const std::string& a,
+        for (auto& vec : r.categories) {
+            std::sort(vec.begin(), vec.end(), [&r](const std::string& a,
                                                               const std::string& b) {
                 const auto ia = r.priceExalted.find(a);
                 const auto ib = r.priceExalted.find(b);
@@ -224,41 +335,47 @@ private:
         }
     }
 
+    static void ParseReference(const std::string& body, PriceResult& r) {
+        nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
+        if (j.is_discarded() || !j.is_array()) return;
+        for (const auto& e : j) {
+            if (!e.is_object()) continue;
+            const std::string id = e.value("ApiId", std::string());
+            const double rel = e.value("RelativePrice", 0.0);
+            if (id == "exalted") r.relExalted = rel;
+            else if (id == "chaos") r.relChaos = rel;
+            else if (id == "divine") r.relDivine = rel;
+        }
+    }
+
     static void SeedUniqueCatalog(PriceResult& r) {
         for (size_t i = 0; i < kUniqueCatalogCount; ++i) {
             const auto& entry = kUniqueCatalog[i];
-            auto it = std::find_if(r.categories.begin(), r.categories.end(),
-                                   [&](const auto& c) { return c.first == entry.category; });
-            if (it == r.categories.end()) {
-                r.categories.emplace_back(entry.category, std::vector<std::string>{entry.name});
-            } else if (std::find(it->second.begin(), it->second.end(), entry.name) == it->second.end()) {
-                it->second.push_back(entry.name);
+            const Category cat = CatFromUniqueApiId(entry.category);
+            if (cat == Category::Count) continue;
+            auto& vec = r.categories[static_cast<size_t>(cat)];
+            if (std::find(vec.begin(), vec.end(), entry.name) == vec.end()) {
+                vec.push_back(entry.name);
             }
         }
     }
 
-    static bool ParseItems(const std::string& body, const char* nameKey, const char* category,
+    static bool ParseItems(const std::string& body, const char* nameKey, Category cat,
                            PriceResult& r, int* pagesOut = nullptr) {
+        if (cat == Category::Count) return false;
         nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
         if (j.is_discarded() || !j.is_object() || !j.contains("Items")) return false;
         if (pagesOut) *pagesOut = j.value("Pages", 1);
         const auto& items = j["Items"];
         if (!items.is_array()) return false;
 
-        std::vector<std::string>* names = nullptr;
-        for (auto& c : r.categories)
-            if (c.first == category) { names = &c.second; break; }
-        if (!names) {
-            r.categories.emplace_back(category, std::vector<std::string>());
-            names = &r.categories.back().second;
-        }
-
+        auto& names = r.categories[static_cast<size_t>(cat)];
         for (const auto& it : items) {
             if (!it.is_object()) continue;
             const std::string name = it.value(nameKey, std::string());
             if (name.empty()) continue;
-            if (std::find(names->begin(), names->end(), name) == names->end())
-                names->push_back(name);
+            if (std::find(names.begin(), names.end(), name) == names.end())
+                names.push_back(name);
             if (it.contains("CurrentPrice") && it["CurrentPrice"].is_number())
                 r.priceExalted[name] = it["CurrentPrice"].get<double>();
         }

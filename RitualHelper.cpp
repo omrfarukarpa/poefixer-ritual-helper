@@ -23,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "1.5.0";
+inline constexpr const char* kRitualHelperVersion    = "1.5.1";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -283,59 +283,88 @@ public:
                       m_settings.selectedItems.size());
         ImGui::SeparatorText(header);
 
-        if (m_prices.categories.empty()) {
+        if (!m_prices.HasCategories()) {
             ImGui::TextDisabled("Item list loads from poe2scout - %s", m_fetchStatus.c_str());
             return;
         }
 
-        char buf[96];
-        std::snprintf(buf, sizeof(buf), "%s", m_itemSearch.c_str());
-        ImGui::SetNextItemWidth(280.f);
-        if (ImGui::InputTextWithHint("##itemsearch", "search items (e.g. omen, mageblood)...",
-                                     buf, sizeof(buf)))
-            m_itemSearch = buf;
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Clear selected")) m_settings.selectedItems.clear();
+        if (ImGui::SmallButton("Clear all selected"))
+            m_settings.selectedItems.clear();
 
-        ImGui::BeginChild("deferitemlist", ImVec2(0.f, 220.f), ImGuiChildFlags_Borders);
-        for (const auto& cat : m_prices.categories) {
-            bool headerShown = false;
-            for (const auto& name : cat.second) {
-                if (!m_itemSearch.empty()
-                    && !RitualHelper::ContainsCI(name, m_itemSearch.c_str()))
-                    continue;
-                if (!headerShown) {
-                    ImGui::SeparatorText(cat.first.c_str());
-                    headerShown = true;
-                }
-                bool on = false;
-                for (const auto& s : m_settings.selectedItems)
-                    if (s == name) { on = true; break; }
-                ImGui::PushID(name.c_str());
-                if (ImGui::Checkbox(name.c_str(), &on)) {
-                    if (on) {
-                        m_settings.selectedItems.push_back(name);
-                    } else {
-                        m_settings.selectedItems.erase(
-                            std::remove(m_settings.selectedItems.begin(),
-                                        m_settings.selectedItems.end(), name),
-                            m_settings.selectedItems.end());
+        for (int i = 0; i < RitualHelper::kCategoryCount; ++i) {
+            const auto cat = static_cast<RitualHelper::Category>(i);
+            const auto& names = m_prices.categories[i];
+            if (names.empty()) continue;
+
+            int ticked = 0;
+            for (const auto& n : names) {
+                if (std::find(m_settings.selectedItems.begin(),
+                              m_settings.selectedItems.end(), n) != m_settings.selectedItems.end())
+                    ++ticked;
+            }
+
+            char hdr[96];
+            std::snprintf(hdr, sizeof(hdr), "%s  (%d/%d)###cat%d",
+                          RitualHelper::CategoryName(cat), ticked, static_cast<int>(names.size()), i);
+
+            ImGui::PushID(i);
+            if (ImGui::CollapsingHeader(hdr)) {
+                ImGui::Indent();
+                m_catFilter[i].Draw("filter", 180.f);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Select all")) {
+                    for (const auto& n : names) {
+                        if (m_catFilter[i].PassFilter(n.c_str())) {
+                            if (std::find(m_settings.selectedItems.begin(),
+                                          m_settings.selectedItems.end(), n) == m_settings.selectedItems.end())
+                                m_settings.selectedItems.push_back(n);
+                        }
                     }
                 }
-                auto pIt = m_prices.priceExalted.find(name);
-                if (pIt != m_prices.priceExalted.end() && pIt->second > 0.0) {
-                    ImGui::SameLine();
-                    char val[32];
-                    FormatValueLocked(val, sizeof(val), pIt->second);
-                    ImGui::TextDisabled("(%s)", val);
-                } else {
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("(no price)");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Clear")) {
+                    for (const auto& n : names) {
+                        auto it = std::find(m_settings.selectedItems.begin(),
+                                            m_settings.selectedItems.end(), n);
+                        if (it != m_settings.selectedItems.end())
+                            m_settings.selectedItems.erase(it);
+                    }
                 }
-                ImGui::PopID();
+
+                ImGui::BeginChild("list", ImVec2(0.f, 200.f), ImGuiChildFlags_Borders);
+                for (const auto& name : names) {
+                    if (!m_catFilter[i].PassFilter(name.c_str())) continue;
+
+                    bool on = std::find(m_settings.selectedItems.begin(),
+                                        m_settings.selectedItems.end(), name) != m_settings.selectedItems.end();
+                    ImGui::PushID(name.c_str());
+                    if (ImGui::Checkbox(name.c_str(), &on)) {
+                        if (on) {
+                            m_settings.selectedItems.push_back(name);
+                        } else {
+                            m_settings.selectedItems.erase(
+                                std::remove(m_settings.selectedItems.begin(),
+                                            m_settings.selectedItems.end(), name),
+                                m_settings.selectedItems.end());
+                        }
+                    }
+                    const auto pIt = m_prices.priceExalted.find(name);
+                    if (pIt != m_prices.priceExalted.end() && pIt->second > 0.0) {
+                        ImGui::SameLine();
+                        char val[32];
+                        FormatValueLocked(val, sizeof(val), pIt->second);
+                        ImGui::TextColored(ImVec4(0.35f, 0.90f, 0.40f, 1.0f), "(%s)", val);
+                    } else {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(no price)");
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndChild();
+                ImGui::Unindent();
             }
+            ImGui::PopID();
         }
-        ImGui::EndChild();
     }
 
     void DrawLeaguePicker() {
@@ -392,7 +421,7 @@ private:
     Clock::time_point m_lastBottomPoll{};
     Clock::time_point m_dryFlashUntil{};
     std::string m_lastDumpPath;
-    std::string m_itemSearch;
+    std::array<ImGuiTextFilter, RitualHelper::kCategoryCount> m_catFilter;
 
     std::thread m_fetchThread;
     std::atomic<bool> m_fetching{false};
@@ -435,7 +464,7 @@ private:
                 } else if (m_fetchAbort.load()) {
                     m_fetchStatus = "refresh canceled";
                 } else {
-                    m_fetchStatus = m_prices.categories.empty()
+                    m_fetchStatus = !m_prices.HasCategories()
                         ? "Incomplete price data; retry with Refresh now"
                         : "Incomplete price data; keeping previous catalog";
                 }
