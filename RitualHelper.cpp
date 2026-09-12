@@ -23,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "1.5.1";
+inline constexpr const char* kRitualHelperVersion    = "1.5.2";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -269,6 +269,29 @@ public:
                 ImGui::TextDisabled("  id='%s' text='%s'", e.stringId.c_str(), e.text.c_str());
             }
 
+            ImGui::SeparatorText("Defer preview");
+            if (m_matches.empty()) {
+                ImGui::TextDisabled("No matching revealed items in the current Favours window.");
+            } else {
+                ImGui::Text("Matching items: %zu", m_matches.size());
+                int previewed = 0;
+                for (const auto& item : m_matches) {
+                    if (previewed++ >= 40) {
+                        ImGui::TextDisabled("... more items");
+                        break;
+                    }
+                    std::lock_guard<std::mutex> lk(m_fetchMutex);
+                    const auto price = m_prices.priceExalted.find(item.name);
+                    if (price != m_prices.priceExalted.end() && price->second > 0.0) {
+                        char value[32];
+                        FormatValueLocked(value, sizeof(value), price->second);
+                        ImGui::TextDisabled("  %s (%s)", item.name.c_str(), value);
+                    } else {
+                        ImGui::TextDisabled("  %s (no price)", item.name.c_str());
+                    }
+                }
+            }
+
             if (ImGui::Button("Write ritual dump")) WriteDump();
             if (!m_lastDumpPath.empty())
                 ImGui::TextDisabled("Last dump: %s", m_lastDumpPath.c_str());
@@ -459,8 +482,19 @@ private:
             {
                 std::lock_guard<std::mutex> lk(m_fetchMutex);
                 m_fetchStatus = r.status;
-                if (r.ok && !m_fetchAbort.load()) {
+                if (!m_fetchAbort.load() && r.ok) {
+                    if (r.leagues.empty() && !m_prices.leagues.empty())
+                        r.leagues = m_prices.leagues;
                     m_prices = std::move(r);
+                    if (!m_prices.ok)
+                        m_fetchStatus = "Catalog loaded; prices unavailable";
+                } else if (!m_fetchAbort.load() && r.HasCategories()) {
+                    if (!m_prices.HasCategories()) {
+                        m_prices = std::move(r);
+                    } else {
+                        MergeCatalogNames(r);
+                    }
+                    m_fetchStatus = "Catalog loaded; prices unavailable";
                 } else if (m_fetchAbort.load()) {
                     m_fetchStatus = "refresh canceled";
                 } else {
@@ -480,6 +514,29 @@ private:
             std::snprintf(out, n, "%.1f div", valueEx / divPrice);
         else
             std::snprintf(out, n, valueEx >= 10.0 ? "%.0f ex" : "%.2f ex", valueEx);
+    }
+
+    void MergeCatalogNames(const RitualHelper::PriceResult& incoming) {
+        for (int i = 0; i < RitualHelper::kCategoryCount; ++i) {
+            auto& current = m_prices.categories[static_cast<size_t>(i)];
+            for (const auto& name : incoming.categories[static_cast<size_t>(i)]) {
+                if (std::find(current.begin(), current.end(), name) == current.end())
+                    current.push_back(name);
+            }
+        }
+        for (auto& names : m_prices.categories) {
+            std::sort(names.begin(), names.end(), [this](const std::string& a,
+                                                         const std::string& b) {
+                const auto ia = m_prices.priceExalted.find(a);
+                const auto ib = m_prices.priceExalted.find(b);
+                const double pa = ia != m_prices.priceExalted.end() ? ia->second : 0.0;
+                const double pb = ib != m_prices.priceExalted.end() ? ib->second : 0.0;
+                if (pa != pb) return pa > pb;
+                return a < b;
+            });
+        }
+        if (m_prices.leagues.empty()) m_prices.leagues = incoming.leagues;
+        if (m_prices.league.empty()) m_prices.league = incoming.league;
     }
 
     void FormatValue(char* out, size_t n, double valueEx) {
