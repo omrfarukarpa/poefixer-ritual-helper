@@ -130,6 +130,8 @@ struct PriceResult {
 
 class Poe2Scout {
 public:
+    static constexpr const wchar_t* kApiHost = L"api.poe2scout.com";
+
     static PriceResult FetchAll(const std::string& requestedLeague = {},
                                 const std::atomic<bool>* abort = nullptr) {
         PriceResult r;
@@ -138,7 +140,7 @@ public:
         if (r.league.empty()) r.league = "Runes of Aldur";
 
         std::string refBody;
-        if (Get("/api/poe2/Leagues/" + Encode(r.league) + "/ReferenceCurrencies", refBody, abort))
+        if (Get("/poe2/Leagues/" + Encode(r.league) + "/ReferenceCurrencies", refBody, abort))
             ParseReference(refBody, r);
 
         if (r.relDivine > 0.0)
@@ -155,7 +157,7 @@ public:
         for (const char* catStr : kCurrencyCats) {
             if (Aborted(abort)) break;
             std::string body;
-            const std::string path = "/api/poe2/Leagues/" + Encode(r.league) +
+            const std::string path = "/poe2/Leagues/" + Encode(r.league) +
                                      "/Currencies/ByCategory?Category=" + catStr +
                                      "&PerPage=250&Page=1";
             const Category cat = CatFromApiId(catStr);
@@ -173,7 +175,7 @@ public:
             bool categoryComplete = false;
             for (int page = 1; page <= 4; ++page) {
                 std::string body;
-                const std::string path = "/api/poe2/Leagues/" + Encode(r.league) +
+                const std::string path = "/poe2/Leagues/" + Encode(r.league) +
                                          "/Uniques/ByCategory?Category=" + std::string(catStr) +
                                          "&PerPage=250&Page=" + std::to_string(page);
                 if (!Get(path, body, abort)) { uniqueComplete = false; break; }
@@ -254,7 +256,7 @@ private:
         WinHttpSetTimeouts(hSession, 4000, 6000, 8000, 10000);
 
         bool ok = false;
-        HINTERNET hConnect = WinHttpConnect(hSession, L"poe2scout.com",
+        HINTERNET hConnect = WinHttpConnect(hSession, kApiHost,
                                             INTERNET_DEFAULT_HTTPS_PORT, 0);
         if (hConnect) {
             const std::wstring wpath = Widen(path);
@@ -295,7 +297,7 @@ private:
     static void DetectLeague(PriceResult& r, const std::string& requestedLeague,
                              const std::atomic<bool>* abort) {
         std::string body;
-        if (!Get("/api/poe2/Leagues", body, abort)) return;
+        if (!Get("/poe2/Leagues", body, abort)) return;
         nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
         if (j.is_discarded() || !j.is_array()) return;
         std::string current;

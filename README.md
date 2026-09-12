@@ -49,7 +49,7 @@ Unofficial third-party game tool. Maintainer: Ömer Faruk ARPA.
 3. Enable **Ritual Helper** in the PoeFixer plugin list, tick the items you want in
    **Defer items** (or set a min value), and open a ritual.
 
-Prices come from poe2scout.com, so the price features need an internet connection;
+Prices come from the poe2scout API, so the price features need an internet connection;
 everything else works offline.
 
 ## Build

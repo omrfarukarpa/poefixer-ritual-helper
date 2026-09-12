@@ -11,7 +11,7 @@ $encodedLeague = [System.Uri]::EscapeDataString($League)
 foreach ($category in $categories) {
     $page = 1
     do {
-        $uri = "https://poe2scout.com/api/poe2/Leagues/$encodedLeague/Uniques/ByCategory?Category=$category&PerPage=250&Page=$page"
+        $uri = "https://api.poe2scout.com/poe2/Leagues/$encodedLeague/Uniques/ByCategory?Category=$category&PerPage=250&Page=$page"
         $response = Invoke-RestMethod -Uri $uri -TimeoutSec 30
         foreach ($item in @($response.Items)) {
             if ($null -eq $item -or [string]::IsNullOrWhiteSpace($item.Name) -or [string]::IsNullOrWhiteSpace($item.Type)) { continue }
