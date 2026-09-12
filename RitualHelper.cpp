@@ -23,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-inline constexpr const char* kRitualHelperVersion    = "1.5.2";
+inline constexpr const char* kRitualHelperVersion    = "1.5.3";
 inline constexpr const char* kRitualHelperMaintainer = "Omer Faruk ARPA";
 
 using RitualHelperConfig::Settings;
@@ -292,6 +292,22 @@ public:
                 }
             }
 
+            if (m_window) {
+                ImGui::Text("Rewards in window: %zu", m_window->items.size());
+                int rewardShown = 0;
+                for (const auto& reward : m_window->items) {
+                    if (rewardShown++ >= 40) {
+                        ImGui::TextDisabled("... more rewards");
+                        break;
+                    }
+                    const bool deferred = std::any_of(
+                        m_matches.begin(), m_matches.end(),
+                        [&](const auto& match) { return match.name == reward.name; });
+                    ImGui::TextDisabled("  %s %s", deferred ? "[DEFER]" : "[skip]",
+                                        reward.name.c_str());
+                }
+            }
+
             if (ImGui::Button("Write ritual dump")) WriteDump();
             if (!m_lastDumpPath.empty())
                 ImGui::TextDisabled("Last dump: %s", m_lastDumpPath.c_str());
@@ -313,6 +329,17 @@ public:
 
         if (ImGui::SmallButton("Clear all selected"))
             m_settings.selectedItems.clear();
+        ImGui::SetNextItemWidth(230.f);
+        ImGui::InputTextWithHint("##customitem", "Add item name (event unique)...",
+                                 m_customItem, sizeof(m_customItem));
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Add item") && m_customItem[0] != '\0') {
+            const std::string name(m_customItem);
+            if (std::find(m_settings.selectedItems.begin(),
+                          m_settings.selectedItems.end(), name) == m_settings.selectedItems.end())
+                m_settings.selectedItems.push_back(name);
+            m_customItem[0] = '\0';
+        }
 
         for (int i = 0; i < RitualHelper::kCategoryCount; ++i) {
             const auto cat = static_cast<RitualHelper::Category>(i);
@@ -444,6 +471,7 @@ private:
     Clock::time_point m_lastBottomPoll{};
     Clock::time_point m_dryFlashUntil{};
     std::string m_lastDumpPath;
+    char m_customItem[128]{};
     std::array<ImGuiTextFilter, RitualHelper::kCategoryCount> m_catFilter;
 
     std::thread m_fetchThread;
