@@ -1,6 +1,6 @@
 # Ritual Helper
 
-**v1.5.3**
+**v1.5.4**
 
 A PoeFixer plugin for **Path of Exile 2** that automates **Ritual defers**: pick the
 items you care about from a live price catalog (or set a value threshold), and one click
